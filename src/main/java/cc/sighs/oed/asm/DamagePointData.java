@@ -39,9 +39,10 @@ public final class DamagePointData {
                 String descriptor = stringField(object, "descriptor");
                 int ordinal = (int) numberField(object, "ordinal");
                 float defaultDamage = (float) numberField(object, "default");
+                String damageSource = stringField(object, "damageSource");
                 String attribute = stringField(object, "attribute");
                 String description = stringField(object, "description");
-                if (owner == null || method == null || descriptor == null || attribute == null || description == null || ordinal <= 0) {
+                if (owner == null || method == null || descriptor == null || damageSource == null || attribute == null || description == null || ordinal <= 0) {
                     continue;
                 }
 
@@ -51,6 +52,7 @@ public final class DamagePointData {
                         descriptor,
                         ordinal,
                         defaultDamage,
+                        damageSource,
                         stripNamespace(attribute),
                         description
                 ));
@@ -63,7 +65,7 @@ public final class DamagePointData {
     }
 
     private static void ensureCache() {
-        if (!Files.exists(CACHE_FILE)) {
+        if (!DamagePointConfig.readCache() || !Files.exists(CACHE_FILE)) {
             new DamagePointMixinPlugin().onLoad("cc.sighs.oed.mixin");
         }
     }
@@ -88,6 +90,6 @@ public final class DamagePointData {
         return matcher.find() && Boolean.parseBoolean(matcher.group(1));
     }
 
-    public record DamagePoint(String owner, String method, String descriptor, int ordinal, float defaultDamage, String attributePath, String description) {
+    public record DamagePoint(String owner, String method, String descriptor, int ordinal, float defaultDamage, String damageSource, String attributePath, String description) {
     }
 }

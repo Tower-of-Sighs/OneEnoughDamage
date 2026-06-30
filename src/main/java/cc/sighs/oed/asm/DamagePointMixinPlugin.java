@@ -18,21 +18,29 @@ import java.util.stream.Stream;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.IincInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FrameNode;
+import org.objectweb.asm.tree.IntInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.VarInsnNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 
 public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
-    private static final String ENTITY_PACKAGE = "net/minecraft/world/entity/";
+    private static final String HURT_TARGET_OWNER_PREFIX = "net/minecraft/world/entity/";
+    private static final List<String> SCAN_CLASS_PREFIXES = List.of(
+            "net/minecraft/world/entity/",
+            "fuzs/illagerinvasion/"
+    );
     private static final String DAMAGE_SOURCES_OWNER = "net/minecraft/world/damagesource/DamageSources";
     private static final String ENTITY_HURT_DESC = "(Lnet/minecraft/world/damagesource/DamageSource;F)Z";
     private static final Path CACHE_FILE = Paths.get("config", "OED", "damage_points-cache.json");
+    private static boolean scannedThisRun;
 
     private final List<ScanResult> scanResults = new ArrayList<>();
     private int scannedClasses;
@@ -73,10 +81,14 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
     }
 
     private void scanAllEntityClassesOnce() {
-        if (Files.exists(CACHE_FILE)) {
+        if (scannedThisRun) {
+            return;
+        }
+        if (DamagePointConfig.readCache() && Files.exists(CACHE_FILE)) {
             return;
         }
 
+        scannedThisRun = true;
         long started = System.nanoTime();
         scanResults.clear();
         scannedClasses = 0;
@@ -141,7 +153,7 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
         try (Stream<Path> stream = Files.walk(root)) {
             stream.filter(Files::isRegularFile)
                     .filter(path -> path.toString().endsWith(".class"))
-                    .filter(path -> toClassFileName(root, path).startsWith(ENTITY_PACKAGE))
+                    .filter(path -> isScannedClass(toClassFileName(root, path)))
                     .forEach(path -> {
                         try (InputStream input = Files.newInputStream(path)) {
                             scanClass(input);
@@ -162,7 +174,7 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
             var entries = jar.entries();
             while (entries.hasMoreElements()) {
                 JarEntry entry = entries.nextElement();
-                if (entry.isDirectory() || !entry.getName().startsWith(ENTITY_PACKAGE) || !entry.getName().endsWith(".class")) {
+                if (entry.isDirectory() || !isScannedClass(entry.getName()) || !entry.getName().endsWith(".class")) {
                     continue;
                 }
 
@@ -172,6 +184,15 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
             }
         } catch (IOException ignored) {
         }
+    }
+
+    private static boolean isScannedClass(String classFileName) {
+        for (String prefix : SCAN_CLASS_PREFIXES) {
+            if (classFileName.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void scanClass(InputStream input) throws IOException {
@@ -192,7 +213,7 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
                 }
 
                 hurtOrdinal++;
-                Float hardcodedDamage = readPreviousFloatConstant(instruction);
+                Float hardcodedDamage = resolvePreviousFloat(method, instruction);
                 if (hardcodedDamage == null) {
                     continue;
                 }
@@ -236,7 +257,7 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
         if ("playerAttack".equals(damageSource) || "thrown".equals(damageSource)) {
             return DamageCategory.SYSTEM;
         }
-        if (owner.startsWith("net.minecraft.world.entity.projectile.")) {
+        if (owner.startsWith("net.minecraft.world.entity.projectile.") || owner.contains(".world.entity.projectile.")) {
             return DamageCategory.PROJECTILE;
         }
         if (owner.startsWith("net.minecraft.world.entity.ai.behavior.warden.")) {
@@ -245,7 +266,7 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
         if ("doHurtTarget".equals(method) || "roar".equals(method)) {
             return DamageCategory.MOB_DIRECT;
         }
-        return DamageCategory.UNKNOWN;
+        return DamageCategory.CUSTOM;
     }
 
     private static boolean isEnvironmentSource(String damageSource) {
@@ -283,18 +304,47 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
         }
 
         return methodInsn.getOpcode() == Opcodes.INVOKEVIRTUAL
-                && methodInsn.owner.startsWith(ENTITY_PACKAGE)
+                && methodInsn.owner.startsWith(HURT_TARGET_OWNER_PREFIX)
                 && "hurt".equals(methodInsn.name)
                 && ENTITY_HURT_DESC.equals(methodInsn.desc);
     }
 
-    private static Float readPreviousFloatConstant(AbstractInsnNode instruction) {
+    private static Float resolvePreviousFloat(MethodNode method, AbstractInsnNode instruction) {
+        return resolvePreviousFloat(method, instruction, 0);
+    }
+
+    private static Float resolvePreviousFloat(MethodNode method, AbstractInsnNode instruction, int depth) {
         AbstractInsnNode previous = previousMeaningful(instruction.getPrevious());
-        if (previous == null) {
+        if (previous == null || depth > 8) {
             return null;
         }
 
-        return readFloatConstant(previous);
+        return resolveFloatValue(method, previous, depth + 1);
+    }
+
+    private static Float resolveFloatValue(MethodNode method, AbstractInsnNode instruction, int depth) {
+        if (instruction == null || depth > 8) {
+            return null;
+        }
+
+        Float constant = readFloatConstant(instruction);
+        if (constant != null) {
+            return constant;
+        }
+
+        return switch (instruction.getOpcode()) {
+            case Opcodes.FLOAD -> instruction instanceof VarInsnNode varInsn ? resolveStoredFloat(method, instruction, varInsn.var, depth + 1) : null;
+            case Opcodes.I2F -> {
+                Integer value = resolvePreviousInt(method, instruction, depth + 1);
+                yield value == null ? null : (float) value;
+            }
+            case Opcodes.FNEG -> {
+                Float value = resolvePreviousFloat(method, instruction, depth + 1);
+                yield value == null ? null : -value;
+            }
+            case Opcodes.FADD, Opcodes.FSUB, Opcodes.FMUL, Opcodes.FDIV -> resolveBinaryFloat(method, instruction, depth + 1);
+            default -> null;
+        };
     }
 
     private static Float readFloatConstant(AbstractInsnNode instruction) {
@@ -305,6 +355,123 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
             case Opcodes.LDC -> instruction instanceof LdcInsnNode ldc && ldc.cst instanceof Float value ? value : null;
             default -> null;
         };
+    }
+
+    private static Integer resolvePreviousInt(MethodNode method, AbstractInsnNode instruction, int depth) {
+        AbstractInsnNode previous = previousMeaningful(instruction.getPrevious());
+        if (previous == null || depth > 8) {
+            return null;
+        }
+
+        Integer constant = readIntConstant(previous);
+        if (constant != null) {
+            return constant;
+        }
+
+        return switch (previous.getOpcode()) {
+            case Opcodes.ILOAD -> previous instanceof VarInsnNode varInsn ? resolveStoredInt(method, previous, varInsn.var, depth + 1) : null;
+            default -> null;
+        };
+    }
+
+    private static Integer readIntConstant(AbstractInsnNode instruction) {
+        return switch (instruction.getOpcode()) {
+            case Opcodes.ICONST_M1 -> -1;
+            case Opcodes.ICONST_0 -> 0;
+            case Opcodes.ICONST_1 -> 1;
+            case Opcodes.ICONST_2 -> 2;
+            case Opcodes.ICONST_3 -> 3;
+            case Opcodes.ICONST_4 -> 4;
+            case Opcodes.ICONST_5 -> 5;
+            case Opcodes.BIPUSH, Opcodes.SIPUSH -> instruction instanceof IntInsnNode intInsn ? intInsn.operand : null;
+            case Opcodes.LDC -> instruction instanceof LdcInsnNode ldc && ldc.cst instanceof Integer value ? value : null;
+            default -> null;
+        };
+    }
+
+    private static Float resolveStoredFloat(MethodNode method, AbstractInsnNode before, int local, int depth) {
+        AbstractInsnNode store = findPreviousLocalWrite(method, before, local, Opcodes.FSTORE);
+        if (store == null) {
+            return null;
+        }
+
+        return resolvePreviousFloat(method, store, depth + 1);
+    }
+
+    private static Integer resolveStoredInt(MethodNode method, AbstractInsnNode before, int local, int depth) {
+        AbstractInsnNode store = findPreviousLocalWrite(method, before, local, Opcodes.ISTORE);
+        if (store == null) {
+            return null;
+        }
+
+        return resolvePreviousInt(method, store, depth + 1);
+    }
+
+    private static AbstractInsnNode findPreviousLocalWrite(MethodNode method, AbstractInsnNode before, int local, int storeOpcode) {
+        int scanned = 0;
+        for (AbstractInsnNode current = before.getPrevious(); current != null && scanned < 80; current = current.getPrevious()) {
+            current = previousMeaningful(current);
+            if (current == null) {
+                return null;
+            }
+            if (isBranchBoundary(current)) {
+                return null;
+            }
+            if (current instanceof IincInsnNode iincInsn && iincInsn.var == local) {
+                return null;
+            }
+            if (current instanceof VarInsnNode varInsn && varInsn.var == local) {
+                return varInsn.getOpcode() == storeOpcode ? varInsn : null;
+            }
+            if (current == method.instructions.getFirst()) {
+                break;
+            }
+            scanned++;
+        }
+        return null;
+    }
+
+    private static Float resolveBinaryFloat(MethodNode method, AbstractInsnNode operation, int depth) {
+        AbstractInsnNode rightInsn = previousMeaningful(operation.getPrevious());
+        if (rightInsn == null) {
+            return null;
+        }
+
+        Float right = resolveFloatValue(method, rightInsn, depth + 1);
+        if (right == null) {
+            return null;
+        }
+
+        AbstractInsnNode leftInsn = previousMeaningful(rightInsn.getPrevious());
+        if (leftInsn == null) {
+            return null;
+        }
+
+        Float left = resolveFloatValue(method, leftInsn, depth + 1);
+        if (left == null) {
+            return null;
+        }
+
+        return switch (operation.getOpcode()) {
+            case Opcodes.FADD -> left + right;
+            case Opcodes.FSUB -> left - right;
+            case Opcodes.FMUL -> left * right;
+            case Opcodes.FDIV -> right == 0.0F ? null : left / right;
+            default -> null;
+        };
+    }
+
+    private static boolean isBranchBoundary(AbstractInsnNode instruction) {
+        int opcode = instruction.getOpcode();
+        return instruction instanceof LabelNode
+                || opcode == Opcodes.GOTO
+                || opcode == Opcodes.JSR
+                || opcode == Opcodes.RET
+                || opcode == Opcodes.TABLESWITCH
+                || opcode == Opcodes.LOOKUPSWITCH
+                || (opcode >= Opcodes.IFEQ && opcode <= Opcodes.IF_ACMPNE)
+                || opcode == Opcodes.IFNULL
+                || opcode == Opcodes.IFNONNULL;
     }
 
     private static AbstractInsnNode previousMeaningful(AbstractInsnNode instruction) {
@@ -389,9 +556,9 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
         MOB_DIRECT("mob_direct", true),
         MOB_SPECIAL("mob_special", true),
         PROJECTILE("projectile", true),
+        CUSTOM("custom", true),
         ENVIRONMENT("environment", false),
-        SYSTEM("system", false),
-        UNKNOWN("unknown", false);
+        SYSTEM("system", false);
 
         private final String id;
         private final boolean attributeCandidate;
