@@ -131,20 +131,16 @@ mixin {
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 repositories {
-    // Put repositories for dependencies here
-    // ForgeGradle automatically adds the Forge maven and Maven Central for you
     maven {
-        url = 'https://cursemaven.com'
+        name = "Curse Maven"
+        url = "https://www.cursemaven.com"
         content {
-            includeGroup 'curse.maven'
+            includeGroup "curse.maven"
         }
     }
-
-    // If you have mod jar dependencies in ./libs, you can declare them as a repository like so.
-    // See https://docs.gradle.org/current/userguide/declaring_repositories.html#sub:flat_dir_resolver
-    // flatDir {
-    //     dir 'libs'
-    // }
+    flatDir {
+        dirs 'libs'
+    }
 }
 
 dependencies {
@@ -174,6 +170,14 @@ dependencies {
 
     implementation fg.deobf("curse.maven:illager-invasion-891324:6192869")
     implementation fg.deobf("curse.maven:puzzles-lib-495476:6918565")
+    implementation fg.deobf("curse.maven:curios-309927:5843594")
+
+    implementation fg.deobf("libs:L_Enders_Cataclysm:3.31")
+    implementation fg.deobf("libs:lionfishapi:3.0")
+
+    implementation fg.deobf("curse.maven:kubejs-238086:5853326")
+    implementation fg.deobf("curse.maven:rhino-416294:6186971")
+    implementation fg.deobf("curse.maven:architectury-api-419699:5137938")
 
 }
 

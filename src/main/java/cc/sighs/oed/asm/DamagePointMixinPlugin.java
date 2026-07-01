@@ -33,10 +33,6 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 
 public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
     private static final String HURT_TARGET_OWNER_PREFIX = "net/minecraft/world/entity/";
-    private static final List<String> SCAN_CLASS_PREFIXES = List.of(
-            "net/minecraft/world/entity/",
-            "fuzs/illagerinvasion/"
-    );
     private static final String DAMAGE_SOURCES_OWNER = "net/minecraft/world/damagesource/DamageSources";
     private static final String ENTITY_HURT_DESC = "(Lnet/minecraft/world/damagesource/DamageSource;F)Z";
     private static final Path CACHE_FILE = Paths.get("config", "OED", "damage_points-cache.json");
@@ -187,12 +183,7 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
     }
 
     private static boolean isScannedClass(String classFileName) {
-        for (String prefix : SCAN_CLASS_PREFIXES) {
-            if (classFileName.startsWith(prefix)) {
-                return true;
-            }
-        }
-        return false;
+        return true;
     }
 
     private void scanClass(InputStream input) throws IOException {
@@ -214,14 +205,13 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
 
                 hurtOrdinal++;
                 Float hardcodedDamage = resolvePreviousFloat(method, instruction);
-                if (hardcodedDamage == null) {
-                    continue;
-                }
+                boolean constant = hardcodedDamage != null;
+                float defaultDamage = constant ? hardcodedDamage : 1.0F;
 
                 String methodName = method.name;
                 String damageSource = findDamageSourceFactory(instruction);
-                DamageCategory category = classify(targetClassName, methodName, hardcodedDamage, damageSource);
-                scanResults.add(new ScanResult(targetClassName, methodName, method.desc, hurtOrdinal, hardcodedDamage, damageSource, category, false));
+                DamageCategory category = classify(targetClassName, methodName, defaultDamage, damageSource);
+                scanResults.add(new ScanResult(targetClassName, methodName, method.desc, hurtOrdinal, defaultDamage, damageSource, category, false, constant));
             }
         }
     }
@@ -511,9 +501,10 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
             json.append("      \"damageSource\": \"").append(escape(result.damageSource())).append("\",\n");
             json.append("      \"category\": \"").append(result.category().id()).append("\",\n");
             json.append("      \"attributeCandidate\": ").append(result.category().attributeCandidate()).append(",\n");
+            json.append("      \"constant\": ").append(result.constant()).append(",\n");
             json.append("      \"transformed\": ").append(result.transformed());
             if (result.category().attributeCandidate()) {
-                String attributePath = attributePath(result.owner(), result.method(), result.ordinal());
+                String attributePath = attributePath(result.owner(), result.method(), result.ordinal(), result.constant());
                 String description = result.owner() + "#" + result.method() + "#" + result.ordinal();
                 json.append(",\n");
                 json.append("      \"attribute\": \"oneenoughdamage:").append(escape(attributePath)).append("\",\n");
@@ -533,11 +524,26 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    private static String attributePath(String owner, String method, int ordinal) {
-        int lastDot = owner.lastIndexOf('.');
-        String packagePath = owner.substring(0, lastDot).replace('.', '/');
-        String classPath = camelToSnake(owner.substring(lastDot + 1));
-        return packagePath + "/" + classPath + "/" + camelToSnake(method) + "/" + ordinal;
+    private static String attributePath(String owner, String method, int ordinal, boolean constant) {
+        String[] parts = owner.split("\\.");
+        StringBuilder path = new StringBuilder();
+        for (int i = 0; i < parts.length; i++) {
+            if (i > 0) {
+                path.append('/');
+            }
+            path.append(camelToSnake(parts[i]));
+        }
+        path.append('/').append(camelToSnake(method)).append('/').append(ordinal);
+        path.append('/').append(constant ? 'r' : 'm');
+        return normalizeAttributePath(path.toString());
+    }
+
+    private static String normalizeAttributePath(String value) {
+        String result = value.toLowerCase(java.util.Locale.ROOT);
+        result = result.replaceAll("[^a-z0-9/._-]", "_");
+        result = result.replaceAll("_+", "_");
+        result = result.replaceAll("(/|^)_+|_(/|$)", "$1$2");
+        return result;
     }
 
     private static String camelToSnake(String value) {
@@ -549,7 +555,7 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
             }
             result.append(Character.toLowerCase(c));
         }
-        return result.toString().replaceAll("[^a-z0-9/._-]", "_");
+        return result.toString();
     }
 
     private enum DamageCategory {
@@ -585,7 +591,8 @@ public final class DamagePointMixinPlugin implements IMixinConfigPlugin {
             float defaultDamage,
             String damageSource,
             DamageCategory category,
-            boolean transformed
+            boolean transformed,
+            boolean constant
     ) {
     }
 }

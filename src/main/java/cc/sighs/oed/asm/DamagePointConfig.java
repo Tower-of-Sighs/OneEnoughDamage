@@ -10,7 +10,7 @@ import java.nio.file.Paths;
 import java.util.Properties;
 
 public final class DamagePointConfig {
-    private static final Path CONFIG_FILE = Paths.get("config", "OEB", "oneenoughdamage.properties");
+    private static final Path CONFIG_FILE = Paths.get("config", "OED", "oneenoughdamage.properties");
     private static final String READ_CACHE_KEY = "readCache";
     private static final String INFER_ATTRIBUTE_HOLDER_KEY = "inferAttributeHolder";
     private static final String INFER_ATTRIBUTE_HOLDER_SEARCH_RADIUS_KEY = "inferAttributeHolderSearchRadius";

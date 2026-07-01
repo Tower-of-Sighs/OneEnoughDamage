@@ -18,6 +18,7 @@ import net.minecraft.world.entity.TraceableEntity;
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraftforge.registries.ForgeRegistries;
 import org.slf4j.Logger;
@@ -27,6 +28,7 @@ public final class DamagePointHooks {
     private static final StackWalker STACK_WALKER = StackWalker.getInstance();
     private static final Map<String, List<DamagePointData.DamagePoint>> DAMAGE_POINTS_BY_CALLER = buildDamagePointIndex();
     private static final Map<String, List<Integer>> OBSERVED_CALL_SITES = new ConcurrentHashMap<>();
+    private static final Map<Class<? extends LivingEntity>, List<EntityType<? extends LivingEntity>>> INFERRED_OWNER_TYPES = new ConcurrentHashMap<>();
 
     private DamagePointHooks() {
     }
@@ -104,8 +106,9 @@ public final class DamagePointHooks {
         }
 
         float value = (float) instance.getValue();
-        LOGGER.info("OED changed {} from {} to {} using {}", attributePath, fallback, value, living);
-        return value;
+        float result = attributePath.endsWith("/m") ? fallback * value : value;
+        LOGGER.info("OED changed {} from {} to {} using {}", attributePath, fallback, result, living);
+        return result;
     }
 
     private static float getDamage(LivingEntity target, Entity attacker, DamagePointData.DamagePoint point, float fallback) {
@@ -131,7 +134,7 @@ public final class DamagePointHooks {
 
             List<DamagePointData.DamagePoint> matches = new ArrayList<>();
             for (DamagePointData.DamagePoint point : points) {
-                if (Float.compare(point.defaultDamage(), amount) != 0 || !damageSourceMatches(point.damageSource(), damageSource)) {
+                if (!damageSourceMatches(point.damageSource(), damageSource)) {
                     continue;
                 }
                 matches.add(point);
@@ -143,7 +146,7 @@ public final class DamagePointHooks {
                 return matches.get(0);
             }
 
-            return findByObservedCallSite(caller, amount, damageSource, matches);
+            return findByObservedCallSite(caller, matches);
         }
         return null;
     }
@@ -164,8 +167,8 @@ public final class DamagePointHooks {
         return result.toString();
     }
 
-    private static DamagePointData.DamagePoint findByObservedCallSite(Caller caller, float amount, String damageSource, List<DamagePointData.DamagePoint> matches) {
-        String key = caller.key() + "#" + amount + "#" + damageSource;
+    private static DamagePointData.DamagePoint findByObservedCallSite(Caller caller, List<DamagePointData.DamagePoint> matches) {
+        String key = caller.key();
         List<Integer> callSites = OBSERVED_CALL_SITES.computeIfAbsent(key, ignored -> new ArrayList<>());
         int callSiteIndex;
         synchronized (callSites) {
@@ -229,8 +232,8 @@ public final class DamagePointHooks {
             return null;
         }
 
-        InferredLivingOwner owner = inferredLivingOwner(point.owner());
-        if (owner == null) {
+        List<EntityType<? extends LivingEntity>> ownerTypes = inferredLivingOwnerTypes(point.owner(), target.level());
+        if (ownerTypes.isEmpty()) {
             return null;
         }
 
@@ -238,7 +241,7 @@ public final class DamagePointHooks {
         List<LivingEntity> candidates = target.level().getEntitiesOfClass(
                 LivingEntity.class,
                 bounds,
-                entity -> entity != target && owner.matches(entity)
+                entity -> entity != target && ownerTypes.contains(entity.getType())
         );
         if (candidates.isEmpty()) {
             return null;
@@ -249,7 +252,7 @@ public final class DamagePointHooks {
                 .orElse(null);
     }
 
-    private static InferredLivingOwner inferredLivingOwner(String scanOwner) {
+    private static List<EntityType<? extends LivingEntity>> inferredLivingOwnerTypes(String scanOwner, Level level) {
         String className = scanOwner;
         int innerClassMarker = scanOwner.indexOf('$');
         if (innerClassMarker >= 0) {
@@ -259,34 +262,40 @@ public final class DamagePointHooks {
         try {
             Class<?> ownerClass = Class.forName(className);
             if (!LivingEntity.class.isAssignableFrom(ownerClass)) {
-                return null;
+                return List.of();
             }
 
-            return new InferredLivingOwner(ownerClass.asSubclass(LivingEntity.class), inferredLivingOwnerTypes(ownerClass));
+            return inferredLivingOwnerTypes(ownerClass.asSubclass(LivingEntity.class), level);
         } catch (ClassNotFoundException ignored) {
-            return null;
+            return List.of();
         }
     }
 
     @SuppressWarnings("unchecked")
-    private static List<EntityType<? extends LivingEntity>> inferredLivingOwnerTypes(Class<?> ownerClass) {
+    private static List<EntityType<? extends LivingEntity>> inferredLivingOwnerTypes(Class<? extends LivingEntity> ownerClass, Level level) {
+        return INFERRED_OWNER_TYPES.computeIfAbsent(ownerClass, key -> scanLivingOwnerTypes(key, level));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<EntityType<? extends LivingEntity>> scanLivingOwnerTypes(Class<? extends LivingEntity> ownerClass, Level level) {
         List<EntityType<? extends LivingEntity>> entityTypes = new ArrayList<>();
         for (EntityType<?> entityType : ForgeRegistries.ENTITY_TYPES.getValues()) {
-            Class<?> baseClass = entityType.getBaseClass();
-            if (LivingEntity.class.isAssignableFrom(baseClass)
-                    && (ownerClass.isAssignableFrom(baseClass) || baseClass.isAssignableFrom(ownerClass))) {
+            Entity created = createEntityForType(entityType, level);
+            if (created instanceof LivingEntity && ownerClass.isInstance(created)) {
                 entityTypes.add((EntityType<? extends LivingEntity>) entityType);
             }
+        }
+        if (!entityTypes.isEmpty()) {
+            LOGGER.info("OED inferred {} owner types {}", ownerClass.getName(), entityTypes.stream().map(ForgeRegistries.ENTITY_TYPES::getKey).toList());
         }
         return List.copyOf(entityTypes);
     }
 
-    private record InferredLivingOwner(Class<? extends LivingEntity> ownerClass, List<EntityType<? extends LivingEntity>> ownerTypes) {
-        private boolean matches(LivingEntity entity) {
-            if (!ownerTypes.isEmpty() && ownerTypes.contains(entity.getType())) {
-                return true;
-            }
-            return ownerClass.isInstance(entity);
+    private static Entity createEntityForType(EntityType<?> entityType, Level level) {
+        try {
+            return entityType.create(level);
+        } catch (RuntimeException ignored) {
+            return null;
         }
     }
 

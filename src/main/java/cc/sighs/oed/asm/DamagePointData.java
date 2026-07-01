@@ -42,6 +42,7 @@ public final class DamagePointData {
                 String damageSource = stringField(object, "damageSource");
                 String attribute = stringField(object, "attribute");
                 String description = stringField(object, "description");
+                boolean constant = booleanField(object, "constant");
                 if (owner == null || method == null || descriptor == null || damageSource == null || attribute == null || description == null || ordinal <= 0) {
                     continue;
                 }
@@ -54,7 +55,8 @@ public final class DamagePointData {
                         defaultDamage,
                         damageSource,
                         stripNamespace(attribute),
-                        description
+                        description,
+                        constant
                 ));
             }
             points.sort(Comparator.comparing(DamagePoint::owner).thenComparing(DamagePoint::method).thenComparingInt(DamagePoint::ordinal));
@@ -90,6 +92,6 @@ public final class DamagePointData {
         return matcher.find() && Boolean.parseBoolean(matcher.group(1));
     }
 
-    public record DamagePoint(String owner, String method, String descriptor, int ordinal, float defaultDamage, String damageSource, String attributePath, String description) {
+    public record DamagePoint(String owner, String method, String descriptor, int ordinal, float defaultDamage, String damageSource, String attributePath, String description, boolean constant) {
     }
 }
