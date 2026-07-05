@@ -25,9 +25,6 @@ public final class DamagePointData {
         List<DamagePointScanResult> scanResults = DamagePointScanner.readCache();
         List<DamagePoint> points = new ArrayList<>(scanResults.size());
         for (DamagePointScanResult result : scanResults) {
-            if (!result.constant()) {
-                continue;
-            }
             if (result.defaultDamage() == 0.0F || result.defaultDamage() == Float.MAX_VALUE) {
                 continue;
             }

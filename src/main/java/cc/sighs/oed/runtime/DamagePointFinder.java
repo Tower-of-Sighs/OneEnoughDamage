@@ -17,15 +17,20 @@ public final class DamagePointFinder {
 
     private final StackWalker stackWalker = StackWalker.getInstance();
     private final Map<String, List<DamagePointData.DamagePoint>> damagePointsByCaller;
+    private final Map<String, List<DamagePointData.DamagePoint>> damagePointsByOwnerAndDescriptor;
     private final Map<String, List<Integer>> observedCallSites = new ConcurrentHashMap<>();
 
     public DamagePointFinder(List<DamagePointData.DamagePoint> points) {
         this.damagePointsByCaller = buildDamagePointIndex(points);
+        this.damagePointsByOwnerAndDescriptor = buildOwnerDescriptorIndex(points);
     }
 
     public DamagePointData.DamagePoint find() {
         for (Caller caller : findDamageCallers()) {
             List<DamagePointData.DamagePoint> points = damagePointsByCaller.get(caller.key());
+            if (points == null) {
+                points = damagePointsByOwnerAndDescriptor.get(caller.ownerDescriptorKey());
+            }
             if (points == null) {
                 continue;
             }
@@ -35,7 +40,10 @@ public final class DamagePointFinder {
                 return matches.get(0);
             }
 
-            return findByObservedCallSite(caller, matches);
+            DamagePointData.DamagePoint point = findByObservedCallSite(caller, matches);
+            if (point != null) {
+                return point;
+            }
         }
         return null;
     }
@@ -49,7 +57,7 @@ public final class DamagePointFinder {
                 callSites.add(caller.byteCodeIndex());
                 callSites.sort(Integer::compareTo);
             }
-            if (caller.byteCodeIndex() < 0 || callSites.size() < matches.size()) {
+            if (caller.byteCodeIndex() < 0) {
                 return null;
             }
             callSiteIndex = callSites.indexOf(caller.byteCodeIndex());
@@ -86,8 +94,20 @@ public final class DamagePointFinder {
         return Map.copyOf(index);
     }
 
+    private static Map<String, List<DamagePointData.DamagePoint>> buildOwnerDescriptorIndex(List<DamagePointData.DamagePoint> points) {
+        Map<String, List<DamagePointData.DamagePoint>> index = new HashMap<>();
+        for (DamagePointData.DamagePoint point : points) {
+            index.computeIfAbsent(ownerDescriptorKey(point.owner(), point.descriptor()), ignored -> new ArrayList<>()).add(point);
+        }
+        return Map.copyOf(index);
+    }
+
     private static String callerKey(String owner, String method, String descriptor) {
         return owner + "#" + method + descriptor;
+    }
+
+    private static String ownerDescriptorKey(String owner, String descriptor) {
+        return owner + "#" + descriptor;
     }
 
     private static Set<String> livingHurtMethodNames() {
@@ -109,6 +129,10 @@ public final class DamagePointFinder {
     private record Caller(String owner, String method, String descriptor, int byteCodeIndex) {
         private String key() {
             return callerKey(owner, method, descriptor);
+        }
+
+        private String ownerDescriptorKey() {
+            return DamagePointFinder.ownerDescriptorKey(owner, descriptor);
         }
     }
 }
