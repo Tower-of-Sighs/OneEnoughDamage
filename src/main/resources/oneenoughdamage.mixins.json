@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "cc.sighs.oed.mixin",
+  "plugin": "cc.sighs.oed.asm.DamagePointMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "AttributeDefaultValueMixin",
+    "LivingEntityDamagePointMixin"
+  ],
+  "client": [
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+  }
+}
