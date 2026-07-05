@@ -2,6 +2,7 @@ package cc.sighs.oed;
 
 import cc.sighs.oed.asm.DamagePointData;
 import cc.sighs.oed.asm.DamagePointTomlConfig;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -30,7 +31,8 @@ import net.minecraftforge.registries.RegistryObject;
 public final class DamagePointAttributes {
     public static final DeferredRegister<Attribute> ATTRIBUTES =
             DeferredRegister.create(ForgeRegistries.ATTRIBUTES, OneEnoughDamage.MODID);
-    public static final RegistryObject<Attribute> PROJECTILE_BASE_DAMAGE = ATTRIBUTES.register(
+    @SuppressWarnings("unused")
+    private static final RegistryObject<Attribute> LEGACY_PROJECTILE_BASE_DAMAGE = ATTRIBUTES.register(
             "projectile_base_damage",
             () -> new RangedAttribute(
                     "oneenoughdamage.projectile_base_damage",
@@ -39,7 +41,6 @@ public final class DamagePointAttributes {
                     2048.0D
             ).setSyncable(true)
     );
-
     private static final Map<DamagePointData.DamagePoint, RegistryObject<Attribute>> DAMAGE_POINT_ATTRIBUTES = registerDamagePointAttributes();
     private static final Map<String, Double> CONFIGURED_DEFAULTS = configuredDefaults();
 
@@ -78,9 +79,6 @@ public final class DamagePointAttributes {
     @SubscribeEvent
     public static void onEntityAttributeModification(EntityAttributeModificationEvent event) {
         for (EntityType<? extends LivingEntity> entityType : event.getTypes()) {
-            if (!event.has(entityType, PROJECTILE_BASE_DAMAGE.get())) {
-                event.add(entityType, PROJECTILE_BASE_DAMAGE.get());
-            }
             for (RegistryObject<Attribute> attribute : DAMAGE_POINT_ATTRIBUTES.values()) {
                 if (!event.has(entityType, attribute.get())) {
                     event.add(entityType, attribute.get());
@@ -133,7 +131,9 @@ public final class DamagePointAttributes {
         }
 
         private static void syncEntity(LivingEntity living, Collection<String> attributeIds) {
-            for (String attributeId : attributeIds) {
+            for (String attributeId : attributeIds.stream()
+                    .sorted(Comparator.comparingInt(id -> id.contains("@") ? 1 : 0))
+                    .toList()) {
                 ConfiguredAttributeKey key = ConfiguredAttributeKey.parse(attributeId);
                 if (key == null || !key.matches(living)) {
                     continue;

@@ -11,9 +11,12 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
@@ -61,12 +64,16 @@ public final class TomlDictionaryRenderer {
                 points.sort(Comparator.comparing((DamagePointScanResult p) -> p.owner())
                         .thenComparing(DamagePointScanResult::method)
                         .thenComparingInt(DamagePointScanResult::ordinal));
+                Set<String> renderedAttributes = new LinkedHashSet<>();
                 for (DamagePointScanResult point : points) {
-                    String attribute = point.attribute();
-                    float value = configuredValues.getOrDefault(attribute, point.defaultDamage());
+                    String attribute = configKey(point.attribute(), key);
+                    if (!renderedAttributes.add(attribute)) {
+                        continue;
+                    }
+                    float value = configuredValues.getOrDefault(attribute,
+                            configuredValues.getOrDefault(point.attribute(), point.defaultDamage()));
                     lines.append("# 模式：").append(point.constant() ? "替换（r）" : "乘数（m）")
                             .append("，默认 ").append(point.defaultDamage())
-                            .append("，伤害源 ").append(point.damageSource())
                             .append("，").append(point.description())
                             .append("\n");
                     lines.append('"').append(escapeTomlString(attribute)).append("\" = ")
@@ -78,15 +85,29 @@ public final class TomlDictionaryRenderer {
 
         try {
             Files.createDirectories(outputFile.getParent());
-            if (isUnchanged(outputFile, lines.toString())) {
+            String generated = lines.toString();
+            if (isUnchanged(outputFile, generated)) {
                 LOGGER.info("OED dictionary: toml unchanged at {}", outputFile);
                 return;
             }
-            backupExistingFile(outputFile);
-            try (Writer writer = Files.newBufferedWriter(outputFile, StandardCharsets.UTF_8)) {
-                writer.write(lines.toString());
+
+            if (!Files.isRegularFile(outputFile)) {
+                try (Writer writer = Files.newBufferedWriter(outputFile, StandardCharsets.UTF_8)) {
+                    writer.write(generated);
+                }
+                LOGGER.info("OED dictionary: wrote toml to {}", outputFile);
+                return;
             }
-            LOGGER.info("OED dictionary: wrote toml to {}", outputFile);
+
+            String updated = appendMissingEntries(Files.readString(outputFile, StandardCharsets.UTF_8), generated);
+            if (updated == null) {
+                LOGGER.info("OED dictionary: toml has all generated keys at {}", outputFile);
+                return;
+            }
+
+            backupExistingFile(outputFile);
+            Files.writeString(outputFile, updated, StandardCharsets.UTF_8);
+            LOGGER.info("OED dictionary: incrementally updated toml at {}", outputFile);
         } catch (IOException e) {
             LOGGER.error("OED dictionary: failed to write toml", e);
         }
@@ -113,6 +134,121 @@ public final class TomlDictionaryRenderer {
         }
         Files.copy(outputFile, backup, StandardCopyOption.COPY_ATTRIBUTES);
         LOGGER.info("OED dictionary: backed up existing toml to {}", backup);
+        pruneBackups(outputFile, baseName, suffix);
+    }
+
+    private static void pruneBackups(Path outputFile, String baseName, String suffix) throws IOException {
+        Path parent = outputFile.getParent();
+        if (parent == null) {
+            return;
+        }
+        String prefix = baseName + ".backup-";
+        List<Path> backups = new ArrayList<>();
+        try (var stream = Files.list(parent)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(path -> {
+                        String name = path.getFileName().toString();
+                        return name.startsWith(prefix) && name.endsWith(suffix);
+                    })
+                    .forEach(backups::add);
+        }
+        backups.sort(Comparator.comparing((Path path) -> {
+            try {
+                return Files.getLastModifiedTime(path).toMillis();
+            } catch (IOException e) {
+                return 0L;
+            }
+        }).reversed());
+        for (int i = 5; i < backups.size(); i++) {
+            Files.deleteIfExists(backups.get(i));
+            LOGGER.info("OED dictionary: removed old toml backup {}", backups.get(i));
+        }
+    }
+
+    private static String appendMissingEntries(String existing, String generated) {
+        Set<String> existingKeys = tomlKeys(existing);
+        List<TomlEntry> generatedEntries = tomlEntries(generated);
+        StringBuilder additions = new StringBuilder();
+        Set<String> added = new LinkedHashSet<>();
+        for (TomlEntry entry : generatedEntries) {
+            if (existingKeys.contains(entry.key()) || !added.add(entry.key())) {
+                continue;
+            }
+            if (additions.isEmpty()) {
+                additions.append("\n\n# OneEnoughDamage incremental additions / 增量新增条目\n");
+            } else {
+                additions.append("\n");
+            }
+            additions.append(entry.block());
+            if (!entry.block().endsWith("\n")) {
+                additions.append("\n");
+            }
+        }
+        if (additions.isEmpty()) {
+            return null;
+        }
+        String separator = existing.endsWith("\n") ? "" : "\n";
+        return existing + separator + additions;
+    }
+
+    private static Set<String> tomlKeys(String content) {
+        Set<String> keys = new LinkedHashSet<>();
+        for (String line : content.split("\\R")) {
+            String key = tomlKey(line);
+            if (key != null) {
+                keys.add(key);
+            }
+        }
+        return keys;
+    }
+
+    private static List<TomlEntry> tomlEntries(String content) {
+        List<TomlEntry> entries = new ArrayList<>();
+        List<String> pendingComments = new ArrayList<>();
+        for (String line : content.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("#")) {
+                pendingComments.add(line);
+                continue;
+            }
+
+            String key = tomlKey(line);
+            if (key != null) {
+                StringBuilder block = new StringBuilder();
+                for (String comment : pendingComments) {
+                    block.append(comment).append("\n");
+                }
+                block.append(line).append("\n");
+                entries.add(new TomlEntry(key, block.toString()));
+            }
+
+            pendingComments.clear();
+        }
+        return entries;
+    }
+
+    private static String tomlKey(String line) {
+        String trimmed = line.trim();
+        if (!trimmed.startsWith("\"")) {
+            return null;
+        }
+        boolean escaped = false;
+        for (int i = 1; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                int equals = trimmed.indexOf('=', i + 1);
+                return equals < 0 ? null : trimmed.substring(1, i).replace("\\\"", "\"").replace("\\\\", "\\");
+            }
+        }
+        return null;
     }
 
     private static String typeLabel(String type) {
@@ -133,6 +269,13 @@ public final class TomlDictionaryRenderer {
 
     private static String escapeTomlString(String value) {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String configKey(String attribute, MobKey key) {
+        if (!"living".equals(key.type()) || key.entityId() == null || key.entityId().isBlank()) {
+            return attribute;
+        }
+        return attribute + "@" + key.entityId();
     }
 
     private static void appendAttackDamageConfig(StringBuilder lines, Map<String, Float> configuredValues, MobKey key) {
@@ -174,5 +317,8 @@ public final class TomlDictionaryRenderer {
             return Long.toString((long) value) + ".0";
         }
         return Float.toString(value);
+    }
+
+    private record TomlEntry(String key, String block) {
     }
 }

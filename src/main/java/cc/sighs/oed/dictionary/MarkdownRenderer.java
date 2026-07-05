@@ -51,8 +51,7 @@ public final class MarkdownRenderer {
                 for (DamagePointScanResult point : points) {
                     String mode = point.constant() ? "替换（r）" : "乘数（m）";
                     lines.append("- `").append(point.attribute()).append("`  <!-- 模式：").append(mode)
-                            .append("，默认 ").append(point.defaultDamage()).append("，伤害源 ")
-                            .append(point.damageSource()).append("，")
+                            .append("，默认 ").append(point.defaultDamage()).append("，")
                             .append(point.description()).append(" -->\n");
                 }
                 lines.append("\n");

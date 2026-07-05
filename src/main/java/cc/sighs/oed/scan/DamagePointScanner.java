@@ -23,6 +23,12 @@ import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
+import cpw.mods.modlauncher.api.INameMappingService;
+import net.minecraftforge.fml.ModList;
+import net.minecraftforge.fml.util.ObfuscationReflectionHelper;
+import net.minecraftforge.fml.loading.LoadingModList;
+import net.minecraftforge.fml.loading.moddiscovery.ModFileInfo;
+import net.minecraftforge.forgespi.language.IModFileInfo;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -42,8 +48,8 @@ import org.slf4j.Logger;
 public final class DamagePointScanner {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String HURT_TARGET_OWNER_PREFIX = "net/minecraft/world/entity/";
-    private static final String DAMAGE_SOURCES_OWNER = "net/minecraft/world/damagesource/DamageSources";
     private static final String ENTITY_HURT_DESC = "(Lnet/minecraft/world/damagesource/DamageSource;F)Z";
+    private static final Set<String> HURT_METHOD_NAMES = hurtMethodNames();
     private static final Path CACHE_FILE = Paths.get("config", "OED", "damage_points-cache.json");
     private static boolean scannedThisRun;
 
@@ -54,6 +60,22 @@ public final class DamagePointScanner {
     private long scanElapsedMillis;
 
     private DamagePointScanner() {
+    }
+
+    private static Set<String> hurtMethodNames() {
+        Set<String> names = new LinkedHashSet<>();
+        names.add("hurt");
+        names.add("m_6469_");
+        names.add(remapMethodName("m_6469_"));
+        return Set.copyOf(names);
+    }
+
+    private static String remapMethodName(String name) {
+        try {
+            return ObfuscationReflectionHelper.remapName(INameMappingService.Domain.METHOD, name);
+        } catch (RuntimeException | LinkageError ignored) {
+            return name;
+        }
     }
 
     public static void scanAndWriteCacheIfNeeded() {
@@ -108,7 +130,6 @@ public final class DamagePointScanner {
                         getString(object, "descriptor"),
                         getInt(object, "ordinal"),
                         getFloat(object, "default"),
-                        getString(object, "damageSource"),
                         getBoolean(object, "transformed"),
                         getBoolean(object, "constant")
                 ));
@@ -179,28 +200,17 @@ public final class DamagePointScanner {
                 float defaultDamage = constant ? hardcodedDamage : 1.0F;
 
                 String methodName = method.name;
-                String damageSource = findDamageSourceFactory(instruction);
                 scanResults.add(new DamagePointScanResult(
                         targetClassName,
                         methodName,
                         method.desc,
                         hurtOrdinal,
                         defaultDamage,
-                        damageSource,
                         false,
                         constant
                 ));
             }
         }
-    }
-
-    private static String findDamageSourceFactory(AbstractInsnNode hurtCall) {
-        for (AbstractInsnNode current = hurtCall.getPrevious(); current != null; current = current.getPrevious()) {
-            if (current instanceof MethodInsnNode methodInsn && DAMAGE_SOURCES_OWNER.equals(methodInsn.owner)) {
-                return methodInsn.name;
-            }
-        }
-        return "unknown";
     }
 
     private static boolean isEntityHurtCall(AbstractInsnNode instruction) {
@@ -210,7 +220,7 @@ public final class DamagePointScanner {
 
         return methodInsn.getOpcode() == Opcodes.INVOKEVIRTUAL
                 && methodInsn.owner.startsWith(HURT_TARGET_OWNER_PREFIX)
-                && "hurt".equals(methodInsn.name)
+                && HURT_METHOD_NAMES.contains(methodInsn.name)
                 && ENTITY_HURT_DESC.equals(methodInsn.desc);
     }
 
@@ -415,7 +425,6 @@ public final class DamagePointScanner {
             json.append("      \"descriptor\": \"").append(escape(result.descriptor())).append("\",\n");
             json.append("      \"ordinal\": ").append(result.ordinal()).append(",\n");
             json.append("      \"default\": ").append(result.defaultDamage()).append(",\n");
-            json.append("      \"damageSource\": \"").append(escape(result.damageSource())).append("\",\n");
             json.append("      \"constant\": ").append(result.constant()).append(",\n");
             json.append("      \"transformed\": ").append(result.transformed()).append(",\n");
             String attributePath = attributePath(result.owner(), result.method(), result.ordinal(), result.constant());
@@ -472,7 +481,10 @@ public final class DamagePointScanner {
 
     private static Set<Path> classpathEntries() {
         Set<Path> entries = new LinkedHashSet<>();
-        addClasspathProperty(entries, "java.class.path");
+        SourceSummary summary = new SourceSummary();
+        addClasspathProperty(entries, "java.class.path", summary);
+        addLoadingModListEntries(entries, summary);
+        addModFileEntries(entries, summary);
 
         String legacyClasspathFile = System.getProperty("legacyClassPath.file");
         if (legacyClasspathFile != null && !legacyClasspathFile.isBlank()) {
@@ -480,36 +492,89 @@ public final class DamagePointScanner {
             if (Files.isRegularFile(path)) {
                 try {
                     for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
-                        addClasspathEntry(entries, line);
+                        if (addClasspathEntry(entries, line)) {
+                            summary.legacyClasspathFile++;
+                        }
                     }
                 } catch (IOException ignored) {
                 }
             }
         }
 
+        LOGGER.info(
+                "OED scanner sources: {} unique entries (classpath {}, LoadingModList {}, ModList {}, legacy {})",
+                entries.size(),
+                summary.classpath,
+                summary.loadingModList,
+                summary.modList,
+                summary.legacyClasspathFile
+        );
         return entries;
     }
 
-    private static void addClasspathProperty(Set<Path> entries, String property) {
+    private static void addLoadingModListEntries(Set<Path> entries, SourceSummary summary) {
+        LoadingModList loadingModList;
+        try {
+            loadingModList = LoadingModList.get();
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        if (loadingModList == null) {
+            return;
+        }
+        for (ModFileInfo modFileInfo : loadingModList.getModFiles()) {
+            try {
+                if (addClasspathEntry(entries, modFileInfo.getFile().getFilePath().toString())) {
+                    summary.loadingModList++;
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private static void addModFileEntries(Set<Path> entries, SourceSummary summary) {
+        ModList modList;
+        try {
+            modList = ModList.get();
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        if (modList == null) {
+            return;
+        }
+        for (IModFileInfo modFileInfo : modList.getModFiles()) {
+            try {
+                if (addClasspathEntry(entries, modFileInfo.getFile().getFilePath().toString())) {
+                    summary.modList++;
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private static void addClasspathProperty(Set<Path> entries, String property, SourceSummary summary) {
         String value = System.getProperty(property);
         if (value == null || value.isBlank()) {
             return;
         }
 
         for (String entry : value.split(File.pathSeparator)) {
-            addClasspathEntry(entries, entry);
+            if (addClasspathEntry(entries, entry)) {
+                summary.classpath++;
+            }
         }
     }
 
-    private static void addClasspathEntry(Set<Path> entries, String entry) {
+    private static boolean addClasspathEntry(Set<Path> entries, String entry) {
         if (entry == null || entry.isBlank()) {
-            return;
+            return false;
         }
 
         Path path = Paths.get(entry);
         if (Files.exists(path)) {
-            entries.add(path);
+            return entries.add(path.toAbsolutePath().normalize());
         }
+        return false;
     }
 
     private static String getString(JsonObject object, String key) {
@@ -530,5 +595,12 @@ public final class DamagePointScanner {
     private static boolean getBoolean(JsonObject object, String key) {
         JsonElement element = object.get(key);
         return element != null && element.isJsonPrimitive() && element.getAsBoolean();
+    }
+
+    private static final class SourceSummary {
+        private int classpath;
+        private int loadingModList;
+        private int modList;
+        private int legacyClasspathFile;
     }
 }

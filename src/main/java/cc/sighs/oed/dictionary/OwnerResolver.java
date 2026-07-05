@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.entity.EntityType;
@@ -48,10 +49,12 @@ public final class OwnerResolver {
         if (!creators.isEmpty()) {
             List<ResolvedOwner> result = new ArrayList<>();
             for (String creator : creators) {
-                ResolvedOwner resolved = resolveDirectOwner(creator);
-                if (resolved != null) {
-                    result.add(resolved);
+                List<ResolvedOwner> concrete = resolveConcreteLivingOwners(creator);
+                if (!concrete.isEmpty()) {
+                    result.addAll(concrete);
+                    continue;
                 }
+                addResolvedOwner(result, creator);
             }
             if (!result.isEmpty()) {
                 return result;
@@ -142,14 +145,35 @@ public final class OwnerResolver {
         return result;
     }
 
+    private List<ResolvedOwner> resolveConcreteLivingOwners(String owner) {
+        ResolvedOwner direct = resolveDirectOwner(owner);
+        if (direct != null && direct.key().entityId() != null) {
+            return List.of(direct);
+        }
+
+        List<ResolvedOwner> result = new ArrayList<>();
+        for (String descendant : analyzer.livingDescendants(owner)) {
+            addResolvedOwner(result, descendant);
+        }
+        return result;
+    }
+
+    private void addResolvedOwner(List<ResolvedOwner> result, String owner) {
+        ResolvedOwner resolved = resolveDirectOwner(owner);
+        if (resolved != null) {
+            result.add(resolved);
+        }
+    }
+
     private MobKey keyFromDescriptionId(String descriptionId, String fallbackClass, String owner, String entityId) {
         String namespace = parseNamespace(descriptionId);
         int lastDot = descriptionId.lastIndexOf('.');
         String keyName = lastDot >= 0 ? descriptionId.substring(lastDot + 1) : descriptionId;
         Map<String, String> en = LanguageLoader.loadLanguage(namespace, "en_us");
         Map<String, String> zh = LanguageLoader.loadLanguage(namespace, "zh_cn");
-        String enName = en.getOrDefault(descriptionId, formatName(keyName));
-        String zhName = zh.getOrDefault(descriptionId, enName);
+        String runtimeName = translatedName(descriptionId, formatName(keyName));
+        String enName = en.getOrDefault(descriptionId, runtimeName);
+        String zhName = zh.getOrDefault(descriptionId, runtimeName);
         return new MobKey(enName, zhName, fallbackClass, analyzer.ownerType(owner), entityId);
     }
 
@@ -163,9 +187,19 @@ public final class OwnerResolver {
             for (String prefix : List.of("entity", "block", "effect", "item")) {
                 String key = prefix + "." + namespace + "." + snake;
                 if (en.containsKey(key)) {
-                    String enName = en.get(key);
-                    String zhName = zh.getOrDefault(key, enName);
+                    String runtimeName = translatedName(key, formatName(snake));
+                    String enName = en.getOrDefault(key, runtimeName);
+                    String zhName = zh.getOrDefault(key, runtimeName);
                     return new ResolvedOwner(namespace, new MobKey(enName, zhName, className, analyzer.ownerType(owner)));
+                }
+                String runtimeName = translatedName(key, key);
+                if (!runtimeName.equals(key)) {
+                    return new ResolvedOwner(namespace, new MobKey(
+                            runtimeName,
+                            zh.getOrDefault(key, runtimeName),
+                            className,
+                            analyzer.ownerType(owner)
+                    ));
                 }
             }
         }
@@ -263,6 +297,11 @@ public final class OwnerResolver {
             result.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1).toLowerCase(Locale.ROOT));
         }
         return result.toString();
+    }
+
+    private static String translatedName(String key, String fallback) {
+        String value = Component.translatable(key).getString();
+        return value.equals(key) ? fallback : value;
     }
 
     private static final class RegistryIndex {

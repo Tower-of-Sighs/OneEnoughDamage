@@ -9,7 +9,6 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraftforge.registries.ForgeRegistries;
@@ -24,9 +23,10 @@ public final class DamagePointHooks {
     }
 
     public static float modifyIncomingDamage(LivingEntity target, DamageSource source, float amount) {
-        DamagePointData.DamagePoint point = finder().find(source.getMsgId(), amount);
+        DamagePointData.DamagePoint point = finder().find();
         if (point == null) {
-            return modifyProjectileBaseDamage(source, amount);
+            LOGGER.info("OED no damage point matched amount {}", amount);
+            return amount;
         }
 
         Entity attacker = source.getEntity();
@@ -34,35 +34,6 @@ public final class DamagePointHooks {
             attacker = source.getDirectEntity();
         }
         return getDamage(target, attacker, point, amount);
-    }
-
-    private static float modifyProjectileBaseDamage(DamageSource source, float amount) {
-        Entity directEntity = source.getDirectEntity();
-        if (!(directEntity instanceof Projectile)) {
-            LOGGER.info("OED no damage point matched source {} amount {}", source.getMsgId(), amount);
-            return amount;
-        }
-
-        LivingEntity owner = ATTRIBUTE_HOLDER_RESOLVER.resolve(source.getEntity() != null ? source.getEntity() : directEntity);
-        if (owner == null) {
-            LOGGER.info("OED kept projectile base at {} because {} has no living owner", amount, directEntity);
-            return amount;
-        }
-
-        AttributeInstance instance = owner.getAttribute(DamagePointAttributes.PROJECTILE_BASE_DAMAGE.get());
-        if (instance == null) {
-            LOGGER.info("OED kept projectile base at {} because {} has no projectile base attribute", amount, owner);
-            return amount;
-        }
-
-        double value = instance.getValue();
-        if (value < 0.0D) {
-            LOGGER.info("OED kept projectile base at {} because {} projectile base is disabled", amount, owner);
-            return amount;
-        }
-
-        LOGGER.info("OED projectile base changed {} damage from {} to {} using {}", directEntity, amount, value, owner);
-        return (float) value;
     }
 
     public static float getDamage(Entity attacker, String attributePath, float fallback) {

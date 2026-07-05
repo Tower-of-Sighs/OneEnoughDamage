@@ -23,12 +23,17 @@ import java.util.jar.JarFile;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import net.minecraftforge.fml.ModList;
+import net.minecraftforge.fml.loading.LoadingModList;
+import net.minecraftforge.fml.loading.moddiscovery.ModFileInfo;
+import net.minecraftforge.forgespi.language.IModFileInfo;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.signature.SignatureReader;
 import org.objectweb.asm.signature.SignatureVisitor;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 import org.slf4j.Logger;
@@ -73,22 +78,32 @@ public final class EntityCreatorAnalyzer {
         if (creatorIndex != null) {
             return creatorIndex;
         }
-        for (Path entry : classpathEntries()) {
+        SourceSummary summary = new SourceSummary();
+        Set<Path> entries = classpathEntries(summary);
+        for (Path entry : entries) {
             if (Files.isDirectory(entry)) {
+                summary.scannedDirectories++;
                 scanDirectory(entry);
             } else if (Files.isRegularFile(entry) && entry.toString().endsWith(".jar")) {
+                summary.scannedJars++;
                 scanJar(entry);
             }
         }
 
         creatorIndex = new LinkedHashMap<>();
         for (Creation creation : creations) {
+            if (creation.methodReturn() && !isProjectileCreationTarget(creation.created())) {
+                continue;
+            }
             if (!isSpawnableEntity(creation.created)) {
                 continue;
             }
             creatorIndex.computeIfAbsent(creation.created, ignored -> new LinkedHashSet<>()).add(creation.creator);
         }
         buildBehaviorTargets();
+        LOGGER.info("OED creator analysis sources: {} unique entries (classpath {}, LoadingModList {}, ModList {}, legacy {}), scanned {} directories and {} jars",
+                entries.size(), summary.classpath, summary.loadingModList, summary.modList, summary.legacyClasspathFile,
+                summary.scannedDirectories, summary.scannedJars);
         LOGGER.info("OED creator analysis: {} classes scanned, {} creations found, {} created classes are spawnable entities, {} behavior targets found",
                 hierarchy.size(), creations.size(), creatorIndex.size(), behaviorTargets.size());
         return creatorIndex;
@@ -196,7 +211,7 @@ public final class EntityCreatorAnalyzer {
                 target = parseEntityTypeTarget(field.desc);
             }
             if (target != null) {
-                creations.add(new Creation(creator, target.replace('/', '.')));
+                creations.add(new Creation(creator, target.replace('/', '.'), false));
             }
         }
     }
@@ -216,13 +231,29 @@ public final class EntityCreatorAnalyzer {
         String creator = outerClass(className);
         for (MethodNode method : classNode.methods) {
             for (AbstractInsnNode instruction = method.instructions.getFirst(); instruction != null; instruction = instruction.getNext()) {
-                if (instruction.getOpcode() != Opcodes.NEW || !(instruction instanceof TypeInsnNode typeInsn)) {
-                    continue;
+                if (instruction.getOpcode() == Opcodes.NEW && instruction instanceof TypeInsnNode typeInsn) {
+                    String createdBinary = typeInsn.desc.replace('/', '.');
+                    creations.add(new Creation(creator, createdBinary, false));
+                } else if (instruction instanceof MethodInsnNode methodInsn) {
+                    String returnType = methodReturnType(methodInsn.desc);
+                    if (returnType != null) {
+                        creations.add(new Creation(creator, returnType, true));
+                    }
                 }
-                String createdBinary = typeInsn.desc.replace('/', '.');
-                creations.add(new Creation(creator, createdBinary));
             }
         }
+    }
+
+    private static String methodReturnType(String descriptor) {
+        int end = descriptor.lastIndexOf(')');
+        if (end < 0 || end + 1 >= descriptor.length() || descriptor.charAt(end + 1) != 'L') {
+            return null;
+        }
+        int classEnd = descriptor.indexOf(';', end + 2);
+        if (classEnd < 0) {
+            return null;
+        }
+        return descriptor.substring(end + 2, classEnd).replace('/', '.');
     }
 
     public boolean isSpawnableEntity(String className) {
@@ -237,12 +268,34 @@ public final class EntityCreatorAnalyzer {
         return !extendsClass(binary, LIVING_ENTITY_INTERNAL);
     }
 
+    private boolean isProjectileCreationTarget(String className) {
+        String internal = className.replace('.', '/');
+        return !ENTITY_INTERNAL.equals(internal)
+                && !PROJECTILE_INTERNAL.equals(internal)
+                && extendsClass(internal, PROJECTILE_INTERNAL);
+    }
+
     /**
      * Returns whether the given class extends {@link net.minecraft.world.entity.LivingEntity}
      * according to the scanned hierarchy.
      */
     public boolean isLivingEntity(String className) {
         return extendsClass(className.replace('.', '/'), LIVING_ENTITY_INTERNAL);
+    }
+
+    public Set<String> livingDescendants(String className) {
+        analyze();
+        Set<String> descendants = new LinkedHashSet<>();
+        String binary = className.replace('/', '.');
+        for (String candidate : hierarchy.keySet()) {
+            if (candidate.equals(binary)) {
+                continue;
+            }
+            if (isLivingEntity(candidate) && extendsClass(candidate, binary.replace('.', '/'))) {
+                descendants.add(candidate);
+            }
+        }
+        return descendants;
     }
 
     /**
@@ -354,9 +407,11 @@ public final class EntityCreatorAnalyzer {
         return innerMarker >= 0 ? className.substring(0, innerMarker) : className;
     }
 
-    private static Set<Path> classpathEntries() {
+    private static Set<Path> classpathEntries(SourceSummary summary) {
         Set<Path> entries = new LinkedHashSet<>();
-        addClasspathProperty(entries, "java.class.path");
+        addClasspathProperty(entries, "java.class.path", summary);
+        addLoadingModListEntries(entries, summary);
+        addModFileEntries(entries, summary);
 
         String legacyClasspathFile = System.getProperty("legacyClassPath.file");
         if (legacyClasspathFile != null && !legacyClasspathFile.isBlank()) {
@@ -364,7 +419,9 @@ public final class EntityCreatorAnalyzer {
             if (Files.isRegularFile(path)) {
                 try {
                     for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
-                        addClasspathEntry(entries, line);
+                        if (addClasspathEntry(entries, line)) {
+                            summary.legacyClasspathFile++;
+                        }
                     }
                 } catch (IOException ignored) {
                 }
@@ -374,29 +431,81 @@ public final class EntityCreatorAnalyzer {
         return entries;
     }
 
-    private static void addClasspathProperty(Set<Path> entries, String property) {
+    private static void addLoadingModListEntries(Set<Path> entries, SourceSummary summary) {
+        LoadingModList loadingModList;
+        try {
+            loadingModList = LoadingModList.get();
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        if (loadingModList == null) {
+            return;
+        }
+        for (ModFileInfo modFileInfo : loadingModList.getModFiles()) {
+            try {
+                if (addClasspathEntry(entries, modFileInfo.getFile().getFilePath().toString())) {
+                    summary.loadingModList++;
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private static void addModFileEntries(Set<Path> entries, SourceSummary summary) {
+        ModList modList;
+        try {
+            modList = ModList.get();
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        if (modList == null) {
+            return;
+        }
+        for (IModFileInfo modFileInfo : modList.getModFiles()) {
+            try {
+                if (addClasspathEntry(entries, modFileInfo.getFile().getFilePath().toString())) {
+                    summary.modList++;
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private static void addClasspathProperty(Set<Path> entries, String property, SourceSummary summary) {
         String value = System.getProperty(property);
         if (value == null || value.isBlank()) {
             return;
         }
         for (String entry : value.split(File.pathSeparator)) {
-            addClasspathEntry(entries, entry);
+            if (addClasspathEntry(entries, entry)) {
+                summary.classpath++;
+            }
         }
     }
 
-    private static void addClasspathEntry(Set<Path> entries, String entry) {
+    private static boolean addClasspathEntry(Set<Path> entries, String entry) {
         if (entry == null || entry.isBlank()) {
-            return;
+            return false;
         }
         Path path = Paths.get(entry);
         if (Files.exists(path)) {
-            entries.add(path);
+            return entries.add(path.toAbsolutePath().normalize());
         }
+        return false;
     }
 
     private record ClassInfo(String superName, List<String> interfaces, String signature) {
     }
 
-    private record Creation(String creator, String created) {
+    private record Creation(String creator, String created, boolean methodReturn) {
+    }
+
+    private static final class SourceSummary {
+        private int classpath;
+        private int loadingModList;
+        private int modList;
+        private int legacyClasspathFile;
+        private int scannedDirectories;
+        private int scannedJars;
     }
 }

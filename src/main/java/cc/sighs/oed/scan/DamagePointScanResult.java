@@ -6,7 +6,6 @@ public record DamagePointScanResult(
         String descriptor,
         int ordinal,
         float defaultDamage,
-        String damageSource,
         boolean transformed,
         boolean constant
 ) {

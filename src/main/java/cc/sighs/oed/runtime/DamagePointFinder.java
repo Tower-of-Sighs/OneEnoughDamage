@@ -4,11 +4,17 @@ import cc.sighs.oed.asm.DamagePointData;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import cpw.mods.modlauncher.api.INameMappingService;
+import net.minecraftforge.fml.util.ObfuscationReflectionHelper;
 
 public final class DamagePointFinder {
+    private static final Set<String> LIVING_HURT_METHOD_NAMES = livingHurtMethodNames();
+
     private final StackWalker stackWalker = StackWalker.getInstance();
     private final Map<String, List<DamagePointData.DamagePoint>> damagePointsByCaller;
     private final Map<String, List<Integer>> observedCallSites = new ConcurrentHashMap<>();
@@ -17,23 +23,14 @@ public final class DamagePointFinder {
         this.damagePointsByCaller = buildDamagePointIndex(points);
     }
 
-    public DamagePointData.DamagePoint find(String damageSource, float amount) {
+    public DamagePointData.DamagePoint find() {
         for (Caller caller : findDamageCallers()) {
             List<DamagePointData.DamagePoint> points = damagePointsByCaller.get(caller.key());
             if (points == null) {
                 continue;
             }
 
-            List<DamagePointData.DamagePoint> matches = new ArrayList<>();
-            for (DamagePointData.DamagePoint point : points) {
-                if (!damageSourceMatches(point.damageSource(), damageSource)) {
-                    continue;
-                }
-                matches.add(point);
-            }
-            if (matches.isEmpty()) {
-                continue;
-            }
+            List<DamagePointData.DamagePoint> matches = new ArrayList<>(points);
             if (matches.size() == 1) {
                 return matches.get(0);
             }
@@ -41,22 +38,6 @@ public final class DamagePointFinder {
             return findByObservedCallSite(caller, matches);
         }
         return null;
-    }
-
-    private static boolean damageSourceMatches(String scannedSource, String runtimeSource) {
-        return scannedSource.equals(runtimeSource) || camelToSnake(scannedSource).equals(runtimeSource);
-    }
-
-    private static String camelToSnake(String value) {
-        StringBuilder result = new StringBuilder();
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (Character.isUpperCase(c) && i > 0) {
-                result.append('_');
-            }
-            result.append(Character.toLowerCase(c));
-        }
-        return result.toString();
     }
 
     private DamagePointData.DamagePoint findByObservedCallSite(Caller caller, List<DamagePointData.DamagePoint> matches) {
@@ -86,7 +67,8 @@ public final class DamagePointFinder {
                         if (seenLivingHurt[0]) {
                             return true;
                         }
-                        if ("net.minecraft.world.entity.LivingEntity".equals(frame.getClassName()) && "hurt".equals(frame.getMethodName())) {
+                        if ("net.minecraft.world.entity.LivingEntity".equals(frame.getClassName())
+                                && LIVING_HURT_METHOD_NAMES.contains(frame.getMethodName())) {
                             seenLivingHurt[0] = true;
                         }
                         return false;
@@ -106,6 +88,22 @@ public final class DamagePointFinder {
 
     private static String callerKey(String owner, String method, String descriptor) {
         return owner + "#" + method + descriptor;
+    }
+
+    private static Set<String> livingHurtMethodNames() {
+        Set<String> names = new LinkedHashSet<>();
+        names.add("hurt");
+        names.add("m_6469_");
+        names.add(remapMethodName("m_6469_"));
+        return Set.copyOf(names);
+    }
+
+    private static String remapMethodName(String name) {
+        try {
+            return ObfuscationReflectionHelper.remapName(INameMappingService.Domain.METHOD, name);
+        } catch (RuntimeException | LinkageError ignored) {
+            return name;
+        }
     }
 
     private record Caller(String owner, String method, String descriptor, int byteCodeIndex) {
