@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.Item;
@@ -107,10 +108,10 @@ public final class OwnerResolver {
     private ResolvedOwner resolveDirectOwner(String owner) {
         String className = classNameOf(owner);
 
-        String descriptionId = registryIndex.findBySuffix(owner);
-        if (descriptionId != null) {
-            String namespace = parseNamespace(descriptionId);
-            return new ResolvedOwner(namespace, keyFromDescriptionId(descriptionId, className, owner));
+        RegistryIndex.Match match = registryIndex.findBySuffix(owner);
+        if (match != null) {
+            String namespace = parseNamespace(match.descriptionId());
+            return new ResolvedOwner(namespace, keyFromDescriptionId(match.descriptionId(), className, owner, match.entityId()));
         }
 
         return resolveFromLanguage(owner, className);
@@ -141,7 +142,7 @@ public final class OwnerResolver {
         return result;
     }
 
-    private MobKey keyFromDescriptionId(String descriptionId, String fallbackClass, String owner) {
+    private MobKey keyFromDescriptionId(String descriptionId, String fallbackClass, String owner, String entityId) {
         String namespace = parseNamespace(descriptionId);
         int lastDot = descriptionId.lastIndexOf('.');
         String keyName = lastDot >= 0 ? descriptionId.substring(lastDot + 1) : descriptionId;
@@ -149,7 +150,7 @@ public final class OwnerResolver {
         Map<String, String> zh = LanguageLoader.loadLanguage(namespace, "zh_cn");
         String enName = en.getOrDefault(descriptionId, formatName(keyName));
         String zhName = zh.getOrDefault(descriptionId, enName);
-        return new MobKey(enName, zhName, fallbackClass, analyzer.ownerType(owner));
+        return new MobKey(enName, zhName, fallbackClass, analyzer.ownerType(owner), entityId);
     }
 
     private ResolvedOwner resolveFromLanguage(String owner, String className) {
@@ -290,7 +291,7 @@ public final class OwnerResolver {
             return dot >= 0 ? id.substring(dot + 1) : id;
         }
 
-        String findBySuffix(String owner) {
+        Match findBySuffix(String owner) {
             String outer = owner.split("\\$")[0];
             String className = outer.substring(outer.lastIndexOf('.') + 1);
             for (String variant : classNameVariants(className)) {
@@ -298,25 +299,29 @@ public final class OwnerResolver {
 
                 EntityType<?> entityType = ENTITY_TYPES.get(snake);
                 if (entityType != null) {
-                    return entityType.getDescriptionId();
+                    ResourceLocation key = ForgeRegistries.ENTITY_TYPES.getKey(entityType);
+                    return new Match(entityType.getDescriptionId(), key == null ? null : key.toString());
                 }
 
                 Block block = BLOCKS.get(snake);
                 if (block != null) {
-                    return block.getDescriptionId();
+                    return new Match(block.getDescriptionId(), null);
                 }
 
                 Item item = ITEMS.get(snake);
                 if (item != null) {
-                    return item.getDescriptionId();
+                    return new Match(item.getDescriptionId(), null);
                 }
 
                 MobEffect effect = EFFECTS.get(snake);
                 if (effect != null) {
-                    return effect.getDescriptionId();
+                    return new Match(effect.getDescriptionId(), null);
                 }
             }
             return null;
+        }
+
+        private record Match(String descriptionId, String entityId) {
         }
     }
 }

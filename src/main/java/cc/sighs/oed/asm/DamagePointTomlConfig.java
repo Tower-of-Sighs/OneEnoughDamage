@@ -44,6 +44,10 @@ public final class DamagePointTomlConfig {
         return VALUES.get(attribute);
     }
 
+    public static Set<String> configuredKeys() {
+        return Set.copyOf(VALUES.keySet());
+    }
+
     public static void addChangeListener(Consumer<Set<String>> listener) {
         CHANGE_LISTENERS.add(listener);
     }

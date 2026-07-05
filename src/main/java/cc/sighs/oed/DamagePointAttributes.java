@@ -4,7 +4,9 @@ import cc.sighs.oed.asm.DamagePointData;
 import cc.sighs.oed.asm.DamagePointTomlConfig;
 import java.util.LinkedHashMap;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -32,7 +34,7 @@ public final class DamagePointAttributes {
             "projectile_base_damage",
             () -> new RangedAttribute(
                     "oneenoughdamage.projectile_base_damage",
-                    DamagePointTomlConfig.configuredDamage("oneenoughdamage:projectile_base_damage", -1.0F),
+                    -1.0D,
                     -1.0D,
                     2048.0D
             ).setSyncable(true)
@@ -67,19 +69,10 @@ public final class DamagePointAttributes {
 
     private static Map<String, Double> configuredDefaults() {
         Map<String, Double> defaults = new LinkedHashMap<>();
-        defaults.put(
-                "projectile_base_damage",
-                (double) DamagePointTomlConfig.configuredDamage("oneenoughdamage:projectile_base_damage", -1.0F)
-        );
         for (DamagePointData.DamagePoint point : DamagePointData.points()) {
-            defaults.put(point.attributePath(), (double) point.defaultDamage());
+            defaults.put(OneEnoughDamage.MODID + ":" + point.attributePath(), (double) point.defaultDamage());
         }
         return Map.copyOf(defaults);
-    }
-
-    private static String stripNamespace(String id) {
-        int separator = id.indexOf(':');
-        return separator < 0 ? id : id.substring(separator + 1);
     }
 
     @SubscribeEvent
@@ -119,7 +112,9 @@ public final class DamagePointAttributes {
                 return;
             }
 
-            syncEntity(living, CONFIGURED_DEFAULTS.keySet());
+            Set<String> attributeIds = new LinkedHashSet<>(CONFIGURED_DEFAULTS.keySet());
+            attributeIds.addAll(DamagePointTomlConfig.configuredKeys());
+            syncEntity(living, attributeIds);
         }
 
         private static void syncConfiguredAttributes(Collection<String> attributeIds) {
@@ -139,13 +134,25 @@ public final class DamagePointAttributes {
 
         private static void syncEntity(LivingEntity living, Collection<String> attributeIds) {
             for (String attributeId : attributeIds) {
-                String path = stripNamespace(attributeId);
-                Double fallback = CONFIGURED_DEFAULTS.get(path);
-                if (fallback == null) {
+                ConfiguredAttributeKey key = ConfiguredAttributeKey.parse(attributeId);
+                if (key == null || !key.matches(living)) {
                     continue;
                 }
 
-                Attribute attribute = ForgeRegistries.ATTRIBUTES.getValue(new ResourceLocation(OneEnoughDamage.MODID, path));
+                ResourceLocation id = ResourceLocation.tryParse(key.attributeId());
+                if (id == null) {
+                    continue;
+                }
+                Double fallback = CONFIGURED_DEFAULTS.get(key.attributeId());
+                Float configured = DamagePointTomlConfig.configuredValue(attributeId);
+                if (fallback == null) {
+                    if (configured == null) {
+                        continue;
+                    }
+                    fallback = (double) configured;
+                }
+
+                Attribute attribute = ForgeRegistries.ATTRIBUTES.getValue(id);
                 if (attribute == null) {
                     continue;
                 }
@@ -155,11 +162,33 @@ public final class DamagePointAttributes {
                     continue;
                 }
 
-                Float configured = DamagePointTomlConfig.configuredValue(OneEnoughDamage.MODID + ":" + path);
                 double value = configured == null ? fallback : configured;
                 if (Double.compare(instance.getBaseValue(), value) != 0) {
                     instance.setBaseValue(value);
                 }
+            }
+        }
+
+        private record ConfiguredAttributeKey(String attributeId, String entityId) {
+            private static ConfiguredAttributeKey parse(String value) {
+                int entitySeparator = value.indexOf('@');
+                if (entitySeparator < 0) {
+                    return new ConfiguredAttributeKey(value, null);
+                }
+                String attributeId = value.substring(0, entitySeparator);
+                String entityId = value.substring(entitySeparator + 1);
+                if (attributeId.isBlank() || entityId.isBlank()) {
+                    return null;
+                }
+                return new ConfiguredAttributeKey(attributeId, entityId);
+            }
+
+            private boolean matches(LivingEntity living) {
+                if (entityId == null) {
+                    return true;
+                }
+                ResourceLocation typeId = ForgeRegistries.ENTITY_TYPES.getKey(living.getType());
+                return typeId != null && entityId.equals(typeId.toString());
             }
         }
     }

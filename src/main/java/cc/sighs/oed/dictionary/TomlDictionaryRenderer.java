@@ -14,6 +14,12 @@ import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.attributes.DefaultAttributes;
+import net.minecraftforge.registries.ForgeRegistries;
 import org.slf4j.Logger;
 
 public final class TomlDictionaryRenderer {
@@ -29,11 +35,6 @@ public final class TomlDictionaryRenderer {
         lines.append("# OneEnoughDamage 硬编码伤害点配置字典\n");
         lines.append("# 改等号右侧的数字即可修改对应 attribute 的初始值，重启游戏后生效。\n");
         lines.append("# /r 表示替换原伤害，/m 表示作为乘数参与计算。\n\n");
-        lines.append("# Projectile Base Damage - 投射物基础伤害覆盖；-1.0 表示禁用。\n");
-        lines.append("\"oneenoughdamage:projectile_base_damage\" = ")
-                .append(formatFloat(configuredValues.getOrDefault("oneenoughdamage:projectile_base_damage", -1.0F)))
-                .append("\n\n");
-
         for (Map.Entry<String, Map<MobKey, List<DamagePointScanResult>>> namespaceEntry : groups.entrySet()) {
             Map<MobKey, List<DamagePointScanResult>> mobs = namespaceEntry.getValue();
             if (mobs == null || mobs.isEmpty()) {
@@ -54,6 +55,7 @@ public final class TomlDictionaryRenderer {
                     lines.append("（类型：").append(typeLabel).append("）");
                 }
                 lines.append("\n");
+                appendAttackDamageConfig(lines, configuredValues, key);
 
                 List<DamagePointScanResult> points = entry.getValue();
                 points.sort(Comparator.comparing((DamagePointScanResult p) -> p.owner())
@@ -76,6 +78,10 @@ public final class TomlDictionaryRenderer {
 
         try {
             Files.createDirectories(outputFile.getParent());
+            if (isUnchanged(outputFile, lines.toString())) {
+                LOGGER.info("OED dictionary: toml unchanged at {}", outputFile);
+                return;
+            }
             backupExistingFile(outputFile);
             try (Writer writer = Files.newBufferedWriter(outputFile, StandardCharsets.UTF_8)) {
                 writer.write(lines.toString());
@@ -84,6 +90,10 @@ public final class TomlDictionaryRenderer {
         } catch (IOException e) {
             LOGGER.error("OED dictionary: failed to write toml", e);
         }
+    }
+
+    private static boolean isUnchanged(Path outputFile, String content) throws IOException {
+        return Files.isRegularFile(outputFile) && Files.readString(outputFile, StandardCharsets.UTF_8).equals(content);
     }
 
     private static void backupExistingFile(Path outputFile) throws IOException {
@@ -123,6 +133,40 @@ public final class TomlDictionaryRenderer {
 
     private static String escapeTomlString(String value) {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static void appendAttackDamageConfig(StringBuilder lines, Map<String, Float> configuredValues, MobKey key) {
+        if (!"living".equals(key.type()) || key.entityId() == null || key.entityId().isBlank()) {
+            return;
+        }
+
+        String configKey = "minecraft:generic.attack_damage@" + key.entityId();
+        Float defaultValue = attackDamageDefault(key.entityId());
+        if (defaultValue == null) {
+            return;
+        }
+        float value = configuredValues.getOrDefault(configKey, defaultValue);
+        lines.append("# 原版近战基础伤害：只作用于 ").append(key.entityId()).append("\n");
+        lines.append("# Vanilla melee base damage: only applies to ").append(key.entityId()).append("\n");
+        lines.append('"').append(escapeTomlString(configKey)).append("\" = ")
+                .append(formatFloat(value)).append("\n");
+    }
+
+    private static Float attackDamageDefault(String entityId) {
+        ResourceLocation id = ResourceLocation.tryParse(entityId);
+        if (id == null) {
+            return null;
+        }
+        EntityType<?> entityType = ForgeRegistries.ENTITY_TYPES.getValue(id);
+        if (entityType == null || !DefaultAttributes.hasSupplier(entityType)) {
+            return null;
+        }
+        @SuppressWarnings("unchecked")
+        EntityType<? extends LivingEntity> livingType = (EntityType<? extends LivingEntity>) entityType;
+        if (!DefaultAttributes.getSupplier(livingType).hasAttribute(Attributes.ATTACK_DAMAGE)) {
+            return null;
+        }
+        return (float) DefaultAttributes.getSupplier(livingType).getBaseValue(Attributes.ATTACK_DAMAGE);
     }
 
     private static String formatFloat(float value) {
