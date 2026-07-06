@@ -6,57 +6,43 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class DamagePointFinder {
+    private static final Set<String> LIVING_HURT_METHOD_NAMES = livingHurtMethodNames();
+
     private final StackWalker stackWalker = StackWalker.getInstance();
     private final Map<String, List<DamagePointData.DamagePoint>> damagePointsByCaller;
+    private final Map<String, List<DamagePointData.DamagePoint>> damagePointsByOwnerAndDescriptor;
     private final Map<String, List<Integer>> observedCallSites = new ConcurrentHashMap<>();
 
     public DamagePointFinder(List<DamagePointData.DamagePoint> points) {
         this.damagePointsByCaller = buildDamagePointIndex(points);
+        this.damagePointsByOwnerAndDescriptor = buildOwnerDescriptorIndex(points);
     }
 
-    public DamagePointData.DamagePoint find(String damageSource, float amount) {
+    public DamagePointData.DamagePoint find() {
         for (Caller caller : findDamageCallers()) {
             List<DamagePointData.DamagePoint> points = damagePointsByCaller.get(caller.key());
+            if (points == null) {
+                points = damagePointsByOwnerAndDescriptor.get(caller.ownerDescriptorKey());
+            }
             if (points == null) {
                 continue;
             }
 
-            List<DamagePointData.DamagePoint> matches = new ArrayList<>();
-            for (DamagePointData.DamagePoint point : points) {
-                if (!damageSourceMatches(point.damageSource(), damageSource)) {
-                    continue;
-                }
-                matches.add(point);
-            }
-            if (matches.isEmpty()) {
-                continue;
-            }
+            List<DamagePointData.DamagePoint> matches = new ArrayList<>(points);
             if (matches.size() == 1) {
                 return matches.get(0);
             }
 
-            return findByObservedCallSite(caller, matches);
+            DamagePointData.DamagePoint point = findByObservedCallSite(caller, matches);
+            if (point != null) {
+                return point;
+            }
         }
         return null;
-    }
-
-    private static boolean damageSourceMatches(String scannedSource, String runtimeSource) {
-        return scannedSource.equals(runtimeSource) || camelToSnake(scannedSource).equals(runtimeSource);
-    }
-
-    private static String camelToSnake(String value) {
-        StringBuilder result = new StringBuilder();
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (Character.isUpperCase(c) && i > 0) {
-                result.append('_');
-            }
-            result.append(Character.toLowerCase(c));
-        }
-        return result.toString();
     }
 
     private DamagePointData.DamagePoint findByObservedCallSite(Caller caller, List<DamagePointData.DamagePoint> matches) {
@@ -68,7 +54,7 @@ public final class DamagePointFinder {
                 callSites.add(caller.byteCodeIndex());
                 callSites.sort(Integer::compareTo);
             }
-            if (caller.byteCodeIndex() < 0 || callSites.size() < matches.size()) {
+            if (caller.byteCodeIndex() < 0) {
                 return null;
             }
             callSiteIndex = callSites.indexOf(caller.byteCodeIndex());
@@ -86,7 +72,8 @@ public final class DamagePointFinder {
                         if (seenLivingHurt[0]) {
                             return true;
                         }
-                        if ("net.minecraft.world.entity.LivingEntity".equals(frame.getClassName()) && "hurt".equals(frame.getMethodName())) {
+                        if ("net.minecraft.world.entity.LivingEntity".equals(frame.getClassName())
+                                && LIVING_HURT_METHOD_NAMES.contains(frame.getMethodName())) {
                             seenLivingHurt[0] = true;
                         }
                         return false;
@@ -104,13 +91,33 @@ public final class DamagePointFinder {
         return Map.copyOf(index);
     }
 
+    private static Map<String, List<DamagePointData.DamagePoint>> buildOwnerDescriptorIndex(List<DamagePointData.DamagePoint> points) {
+        Map<String, List<DamagePointData.DamagePoint>> index = new HashMap<>();
+        for (DamagePointData.DamagePoint point : points) {
+            index.computeIfAbsent(ownerDescriptorKey(point.owner(), point.descriptor()), ignored -> new ArrayList<>()).add(point);
+        }
+        return Map.copyOf(index);
+    }
+
     private static String callerKey(String owner, String method, String descriptor) {
         return owner + "#" + method + descriptor;
+    }
+
+    private static String ownerDescriptorKey(String owner, String descriptor) {
+        return owner + "#" + descriptor;
+    }
+
+    private static Set<String> livingHurtMethodNames() {
+        return Set.of("hurt");
     }
 
     private record Caller(String owner, String method, String descriptor, int byteCodeIndex) {
         private String key() {
             return callerKey(owner, method, descriptor);
+        }
+
+        private String ownerDescriptorKey() {
+            return DamagePointFinder.ownerDescriptorKey(owner, descriptor);
         }
     }
 }

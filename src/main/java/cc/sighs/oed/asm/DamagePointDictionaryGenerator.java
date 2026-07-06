@@ -64,7 +64,7 @@ public final class DamagePointDictionaryGenerator {
 
     private static void generate() {
         long start = System.nanoTime();
-        List<DamagePointScanResult> points = DamagePointScanner.readCache();
+        List<DamagePointScanResult> points = DamagePointScanner.withUniqueAttributes(DamagePointScanner.readCache());
         if (points.isEmpty()) {
             LOGGER.warn("OED dictionary: cache exists but contains no points, skipping generation");
             return;

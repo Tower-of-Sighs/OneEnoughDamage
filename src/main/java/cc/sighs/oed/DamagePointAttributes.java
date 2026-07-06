@@ -3,6 +3,7 @@ package cc.sighs.oed;
 import cc.sighs.oed.asm.DamagePointData;
 import cc.sighs.oed.asm.DamagePointTomlConfig;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -31,7 +32,8 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 public final class DamagePointAttributes {
     public static final DeferredRegister<Attribute> ATTRIBUTES =
             DeferredRegister.create(BuiltInRegistries.ATTRIBUTE, OneEnoughDamage.MODID);
-    public static final DeferredHolder<Attribute, Attribute> PROJECTILE_BASE_DAMAGE = ATTRIBUTES.register(
+    @SuppressWarnings("unused")
+    private static final DeferredHolder<Attribute, Attribute> LEGACY_PROJECTILE_BASE_DAMAGE = ATTRIBUTES.register(
             "projectile_base_damage",
             () -> new RangedAttribute(
                     "oneenoughdamage.projectile_base_damage",
@@ -40,7 +42,6 @@ public final class DamagePointAttributes {
                     2048.0D
             ).setSyncable(true)
     );
-
     private static final Map<DamagePointData.DamagePoint, DeferredHolder<Attribute, Attribute>> DAMAGE_POINT_ATTRIBUTES =
             registerDamagePointAttributes();
     private static final Map<String, Double> CONFIGURED_DEFAULTS = configuredDefaults();
@@ -80,9 +81,6 @@ public final class DamagePointAttributes {
     @SubscribeEvent
     public static void onEntityAttributeModification(EntityAttributeModificationEvent event) {
         for (EntityType<? extends LivingEntity> entityType : event.getTypes()) {
-            if (!event.has(entityType, PROJECTILE_BASE_DAMAGE)) {
-                event.add(entityType, PROJECTILE_BASE_DAMAGE);
-            }
             for (DeferredHolder<Attribute, Attribute> attribute : DAMAGE_POINT_ATTRIBUTES.values()) {
                 if (!event.has(entityType, attribute)) {
                     event.add(entityType, attribute);
@@ -135,7 +133,9 @@ public final class DamagePointAttributes {
         }
 
         private static void syncEntity(LivingEntity living, Collection<String> attributeIds) {
-            for (String attributeId : attributeIds) {
+            for (String attributeId : attributeIds.stream()
+                    .sorted(Comparator.comparingInt(id -> id.contains("@") ? 1 : 0))
+                    .toList()) {
                 ConfiguredAttributeKey key = ConfiguredAttributeKey.parse(attributeId);
                 if (key == null || !key.matches(living)) {
                     continue;

@@ -22,12 +22,9 @@ public final class DamagePointData {
             return List.of();
         }
 
-        List<DamagePointScanResult> scanResults = DamagePointScanner.readCache();
+        List<DamagePointScanResult> scanResults = DamagePointScanner.withUniqueAttributes(DamagePointScanner.readCache());
         List<DamagePoint> points = new ArrayList<>(scanResults.size());
         for (DamagePointScanResult result : scanResults) {
-            if (!result.constant()) {
-                continue;
-            }
             if (result.defaultDamage() == 0.0F || result.defaultDamage() == Float.MAX_VALUE) {
                 continue;
             }
@@ -38,7 +35,6 @@ public final class DamagePointData {
                     result.descriptor(),
                     result.ordinal(),
                     DamagePointTomlConfig.configuredDamage(result.attribute(), result.defaultDamage()),
-                    result.damageSource(),
                     attributePath,
                     result.description(),
                     result.constant()
@@ -61,6 +57,6 @@ public final class DamagePointData {
         return separator < 0 ? id : id.substring(separator + 1);
     }
 
-    public record DamagePoint(String owner, String method, String descriptor, int ordinal, float defaultDamage, String damageSource, String attributePath, String description, boolean constant) {
+    public record DamagePoint(String owner, String method, String descriptor, int ordinal, float defaultDamage, String attributePath, String description, boolean constant) {
     }
 }

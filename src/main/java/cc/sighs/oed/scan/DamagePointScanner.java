@@ -16,15 +16,22 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
+import net.neoforged.fml.ModList;
+import net.neoforged.fml.loading.LoadingModList;
+import net.neoforged.fml.loading.moddiscovery.ModFileInfo;
+import net.neoforged.neoforgespi.language.IModFileInfo;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FrameNode;
@@ -42,8 +49,8 @@ import org.slf4j.Logger;
 public final class DamagePointScanner {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String HURT_TARGET_OWNER_PREFIX = "net/minecraft/world/entity/";
-    private static final String DAMAGE_SOURCES_OWNER = "net/minecraft/world/damagesource/DamageSources";
     private static final String ENTITY_HURT_DESC = "(Lnet/minecraft/world/damagesource/DamageSource;F)Z";
+    private static final Set<String> HURT_METHOD_NAMES = hurtMethodNames();
     private static final Path CACHE_FILE = Paths.get("config", "OED", "damage_points-cache.json");
     private static boolean scannedThisRun;
 
@@ -54,6 +61,10 @@ public final class DamagePointScanner {
     private long scanElapsedMillis;
 
     private DamagePointScanner() {
+    }
+
+    private static Set<String> hurtMethodNames() {
+        return Set.of("hurt");
     }
 
     public static void scanAndWriteCacheIfNeeded() {
@@ -108,7 +119,6 @@ public final class DamagePointScanner {
                         getString(object, "descriptor"),
                         getInt(object, "ordinal"),
                         getFloat(object, "default"),
-                        getString(object, "damageSource"),
                         getBoolean(object, "transformed"),
                         getBoolean(object, "constant")
                 ));
@@ -179,28 +189,17 @@ public final class DamagePointScanner {
                 float defaultDamage = constant ? hardcodedDamage : 1.0F;
 
                 String methodName = method.name;
-                String damageSource = findDamageSourceFactory(instruction);
                 scanResults.add(new DamagePointScanResult(
                         targetClassName,
                         methodName,
                         method.desc,
                         hurtOrdinal,
                         defaultDamage,
-                        damageSource,
                         false,
                         constant
                 ));
             }
         }
-    }
-
-    private static String findDamageSourceFactory(AbstractInsnNode hurtCall) {
-        for (AbstractInsnNode current = hurtCall.getPrevious(); current != null; current = current.getPrevious()) {
-            if (current instanceof MethodInsnNode methodInsn && DAMAGE_SOURCES_OWNER.equals(methodInsn.owner)) {
-                return methodInsn.name;
-            }
-        }
-        return "unknown";
     }
 
     private static boolean isEntityHurtCall(AbstractInsnNode instruction) {
@@ -210,7 +209,7 @@ public final class DamagePointScanner {
 
         return methodInsn.getOpcode() == Opcodes.INVOKEVIRTUAL
                 && methodInsn.owner.startsWith(HURT_TARGET_OWNER_PREFIX)
-                && "hurt".equals(methodInsn.name)
+                && HURT_METHOD_NAMES.contains(methodInsn.name)
                 && ENTITY_HURT_DESC.equals(methodInsn.desc);
     }
 
@@ -407,29 +406,104 @@ public final class DamagePointScanner {
         json.append("    \"elapsedMillis\": ").append(scanElapsedMillis).append("\n");
         json.append("  },\n");
         json.append("  \"points\": [\n");
-        for (int i = 0; i < scanResults.size(); i++) {
-            DamagePointScanResult result = scanResults.get(i);
+        List<DamagePointScanResult> results = withUniqueAttributes(scanResults);
+        for (int i = 0; i < results.size(); i++) {
+            DamagePointScanResult result = results.get(i);
             json.append("    {\n");
             json.append("      \"owner\": \"").append(escape(result.owner())).append("\",\n");
             json.append("      \"method\": \"").append(escape(result.method())).append("\",\n");
             json.append("      \"descriptor\": \"").append(escape(result.descriptor())).append("\",\n");
             json.append("      \"ordinal\": ").append(result.ordinal()).append(",\n");
             json.append("      \"default\": ").append(result.defaultDamage()).append(",\n");
-            json.append("      \"damageSource\": \"").append(escape(result.damageSource())).append("\",\n");
             json.append("      \"constant\": ").append(result.constant()).append(",\n");
             json.append("      \"transformed\": ").append(result.transformed()).append(",\n");
-            String attributePath = attributePath(result.owner(), result.method(), result.ordinal(), result.constant());
             String description = result.owner() + "#" + result.method() + "#" + result.ordinal();
-            json.append("      \"attribute\": \"oneenoughdamage:").append(escape(attributePath)).append("\",\n");
+            json.append("      \"attribute\": \"").append(escape(result.attribute())).append("\",\n");
             json.append("      \"description\": \"").append(escape(description)).append("\"\n");
             json.append("    }");
-            if (i + 1 < scanResults.size()) {
+            if (i + 1 < results.size()) {
                 json.append(",");
             }
             json.append("\n");
         }
         json.append("  ]\n}\n");
         return json.toString();
+    }
+
+    public static List<DamagePointScanResult> withUniqueAttributes(List<DamagePointScanResult> results) {
+        List<String> attributePaths = attributePaths(results);
+        List<DamagePointScanResult> uniqueResults = new ArrayList<>(results.size());
+        for (int i = 0; i < results.size(); i++) {
+            uniqueResults.add(results.get(i).withAttribute("oneenoughdamage:" + attributePaths.get(i)));
+        }
+        return uniqueResults;
+    }
+
+    public static List<String> attributePaths(List<DamagePointScanResult> results) {
+        Map<String, Integer> baseCounts = new LinkedHashMap<>();
+        for (DamagePointScanResult result : results) {
+            baseCounts.merge(baseAttributePath(result), 1, Integer::sum);
+        }
+
+        Set<String> used = new LinkedHashSet<>();
+        List<String> paths = new ArrayList<>(results.size());
+        for (DamagePointScanResult result : results) {
+            String base = baseAttributePath(result);
+            String candidate = baseCounts.getOrDefault(base, 0) > 1
+                    ? normalizeAttributePath(base + "/" + descriptorSuffix(result.descriptor()))
+                    : base;
+            paths.add(uniquePath(candidate, used));
+        }
+        return paths;
+    }
+
+    private static String baseAttributePath(DamagePointScanResult result) {
+        return attributePath(result.owner(), result.method(), result.ordinal(), result.constant());
+    }
+
+    private static String uniquePath(String candidate, Set<String> used) {
+        String path = candidate;
+        int duplicate = 1;
+        while (!used.add(path)) {
+            duplicate++;
+            path = normalizeAttributePath(candidate + "/" + duplicate);
+        }
+        return path;
+    }
+
+    private static String descriptorSuffix(String descriptor) {
+        try {
+            StringBuilder suffix = new StringBuilder("d");
+            for (Type argument : Type.getArgumentTypes(descriptor)) {
+                suffix.append('_').append(typeName(argument));
+            }
+            suffix.append("_to_").append(typeName(Type.getReturnType(descriptor)));
+            return normalizeAttributePath(suffix.toString());
+        } catch (RuntimeException ignored) {
+            return "d_" + Integer.toUnsignedString(descriptor.hashCode(), 36);
+        }
+    }
+
+    private static String typeName(Type type) {
+        return switch (type.getSort()) {
+            case Type.VOID -> "void";
+            case Type.BOOLEAN -> "boolean";
+            case Type.CHAR -> "char";
+            case Type.BYTE -> "byte";
+            case Type.SHORT -> "short";
+            case Type.INT -> "int";
+            case Type.FLOAT -> "float";
+            case Type.LONG -> "long";
+            case Type.DOUBLE -> "double";
+            case Type.ARRAY -> typeName(type.getElementType()) + "_array";
+            case Type.OBJECT -> simpleClassName(type.getClassName());
+            default -> "unknown";
+        };
+    }
+
+    private static String simpleClassName(String className) {
+        int separator = className.lastIndexOf('.');
+        return camelToSnake(separator < 0 ? className : className.substring(separator + 1));
     }
 
     public static String escape(String value) {
@@ -472,7 +546,10 @@ public final class DamagePointScanner {
 
     private static Set<Path> classpathEntries() {
         Set<Path> entries = new LinkedHashSet<>();
-        addClasspathProperty(entries, "java.class.path");
+        SourceSummary summary = new SourceSummary();
+        addClasspathProperty(entries, "java.class.path", summary);
+        addLoadingModListEntries(entries, summary);
+        addModFileEntries(entries, summary);
 
         String legacyClasspathFile = System.getProperty("legacyClassPath.file");
         if (legacyClasspathFile != null && !legacyClasspathFile.isBlank()) {
@@ -480,36 +557,89 @@ public final class DamagePointScanner {
             if (Files.isRegularFile(path)) {
                 try {
                     for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
-                        addClasspathEntry(entries, line);
+                        if (addClasspathEntry(entries, line)) {
+                            summary.legacyClasspathFile++;
+                        }
                     }
                 } catch (IOException ignored) {
                 }
             }
         }
 
+        LOGGER.info(
+                "OED scanner sources: {} unique entries (classpath {}, LoadingModList {}, ModList {}, legacy {})",
+                entries.size(),
+                summary.classpath,
+                summary.loadingModList,
+                summary.modList,
+                summary.legacyClasspathFile
+        );
         return entries;
     }
 
-    private static void addClasspathProperty(Set<Path> entries, String property) {
+    private static void addLoadingModListEntries(Set<Path> entries, SourceSummary summary) {
+        LoadingModList loadingModList;
+        try {
+            loadingModList = LoadingModList.get();
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        if (loadingModList == null) {
+            return;
+        }
+        for (ModFileInfo modFileInfo : loadingModList.getModFiles()) {
+            try {
+                if (addClasspathEntry(entries, modFileInfo.getFile().getFilePath().toString())) {
+                    summary.loadingModList++;
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private static void addModFileEntries(Set<Path> entries, SourceSummary summary) {
+        ModList modList;
+        try {
+            modList = ModList.get();
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        if (modList == null) {
+            return;
+        }
+        for (IModFileInfo modFileInfo : modList.getModFiles()) {
+            try {
+                if (addClasspathEntry(entries, modFileInfo.getFile().getFilePath().toString())) {
+                    summary.modList++;
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private static void addClasspathProperty(Set<Path> entries, String property, SourceSummary summary) {
         String value = System.getProperty(property);
         if (value == null || value.isBlank()) {
             return;
         }
 
         for (String entry : value.split(File.pathSeparator)) {
-            addClasspathEntry(entries, entry);
+            if (addClasspathEntry(entries, entry)) {
+                summary.classpath++;
+            }
         }
     }
 
-    private static void addClasspathEntry(Set<Path> entries, String entry) {
+    private static boolean addClasspathEntry(Set<Path> entries, String entry) {
         if (entry == null || entry.isBlank()) {
-            return;
+            return false;
         }
 
         Path path = Paths.get(entry);
         if (Files.exists(path)) {
-            entries.add(path);
+            return entries.add(path.toAbsolutePath().normalize());
         }
+        return false;
     }
 
     private static String getString(JsonObject object, String key) {
@@ -530,5 +660,12 @@ public final class DamagePointScanner {
     private static boolean getBoolean(JsonObject object, String key) {
         JsonElement element = object.get(key);
         return element != null && element.isJsonPrimitive() && element.getAsBoolean();
+    }
+
+    private static final class SourceSummary {
+        private int classpath;
+        private int loadingModList;
+        private int modList;
+        private int legacyClasspathFile;
     }
 }
