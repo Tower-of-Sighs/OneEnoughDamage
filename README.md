@@ -1,128 +1,93 @@
 # OneEnoughDamage
 
-OneEnoughDamage 会扫描 Minecraft 和已加载模组中硬编码的 `LivingEntity#hurt(DamageSource, float)` 伤害调用，并把能归属到生物的伤害点注册成可配置的 Attribute。
+你是否遇到过无法修改的硬编码伤害？
 
-简单来说，它把原本写死在代码里的技能、弹射物、尖牙、魔法、区域伤害等数值整理成字典和 TOML 配置，方便整合包作者统一调整。
+你是遇到过弹射物、尖牙、魔法、召唤物、区域伤害这种想平衡都无从下手的伤害？
 
-## 功能
+你是否知道，利维坦有11种不同的伤害，而焰魔有17种不同的伤害？
 
-- 启动时扫描 `.class` 文件和模组 `.jar` 文件。
-- 把可归属伤害点注册为 `oneenoughdamage:*` Attribute。
-- 生成主字典、未归属字典和可编辑 TOML 配置。
-- 重新生成 TOML 时保留已有手改数值。
-- TOML 内容确实变化时，覆盖前会自动备份旧文件。
-- 支持实体限定配置，例如 `attribute@minecraft:skeleton`。
-- 能把弹射物、效果实体、召唤实体等非生物伤害归属回对应生物。
-- 支持调试模式下 TOML 热重载和增量同步。
+你的整合包里是否有几百个需要平衡伤害的生物？
 
-## 生成文件
+现在，有了 OED，调整伤害变得轻而易举，所有模组中的硬编码伤害都会在启动时被扫描，并自动为相关生物注册 Attribute 属性。
+在配置文件中还能直接修改默认值，包括原版的伤害属性，一秒重载，供整合包作者平衡所有伤害。
 
-文件会生成在 `config/OED/` 下：
+## 属性自动注册
 
-```text
-damage_points-cache.json
-damage-point-dictionary.md
-damage-point-dictionary.toml
-damage-point-unattributed.md
-oneenoughdamage.toml
-```
+默认本模组启动时会扫描游戏本体以及所有模组的硬编码伤害，把能挂靠给具体生物的伤害注册为 Attribute 属性。
 
-- `damage_points-cache.json`：扫描缓存，机器读取，不建议手改。
-- `damage-point-dictionary.md`：已归属伤害点字典。
-- `damage-point-dictionary.toml`：可编辑配置文件，主要改这个。
+这里的挂靠会通过静态分析去追溯，如唤魔者召唤的尖牙就会挂靠给唤魔者，大部分召唤物伤害、buff 伤害等也能正确挂靠给所有可作为来源的生物。
+
+属性 ID 示例：`oneenoughdamage:fuzs/illagerinvasion/world/entity/monster/invoker_fangs/damage/2/r`
+
+命名规则是伤害点的具体路径+次序+结算方式，r 代表固定伤害，m 代表倍率伤害，仅用于如伤害随难度变化这种动态场景下，默认为 1.0。
+
+模组越多，扫描所需时间会越久，预估200模组左右的整合包扫描时间会达到十秒，在初次启动后，可以开启配置中的 `readCache` 项，之后就可以直接读取缓存，跳过扫描阶段。
+
+## 快速调整伤害
+
+安装本模组后，你有两种方式可以调整生物的伤害，一是直接在配置文件中修改伤害的默认值，二是通过 KubeJS 等方式动态调整 Attribute。
+
+在 `config/OED/` 下会生成这几个文件：
+
+- `damage_points-cache.json`：扫描缓存，机器读取，体积较大，推荐无视。
+- `damage-point-dictionary.md`：已归属伤害点字典，自带中英对照，按生物归类伤害，方便查询。
+- `damage-point-dictionary.toml`：可编辑配置文件，样式类似字典，包含原版 `minecraft:generic.attack_damage`。
 - `damage-point-unattributed.md`：暂时无法安全归属到生物的伤害点。
 - `oneenoughdamage.toml`：模组行为配置。
 
-当 `damage-point-dictionary.toml` 需要覆盖时，会先把旧文件复制成备份：
+在 `damage-point-dictionary.toml` 中修改属性的对应值可以直接改变属性注册时的默认值，但需要重启游戏生效，非常适合无需动态调整伤害的简单平衡。
 
-```text
-damage-point-dictionary.backup-20260705-110203.toml
+如果你尚在测试，可以开启配置中的 `debugMode` 项，那么文件中默认值的修改就会被随时监听并注入到游戏中立即生效。
+
+可修改项中包含原版通用的 `minecraft:generic.attack_damage`，哪怕你并不为硬编码伤害发愁，同样可以快速调整并测试大量生物的伤害。
+
+`damage-point-dictionary.toml` 的更新方式是增量更新，当你新增了模组或删除了模组，原有配置会备份，并在保留属性值修改的前提下新增或减少行。
+
+## 动态调整伤害
+
+如果你需要动态调整伤害，推荐通过 KubeJS 调用 Attribute 相关方法修改或者使用指令。
+
+推荐教程：
+- [KubeJS 修改属性教程](https://docs.variedmc.cc/zh/modpack/kubejs/1.20.1/Entity/Attribute)
+- [原版 /attribute 指令教程](https://zh.minecraft.wiki/w/%E5%91%BD%E4%BB%A4/attribute?variant=zh-cn)
+
+以下是一个示例，灾变的紫水晶巨蟹每次受到伤害后自身所造成伤害+3，安装了 ProbeJS 之后打出 @attribute 即可触发属性名自动补全。
+
+```javascript
+// server_scripts
+EntityEvents.hurt(event => {
+    if (event.getEntity().is("cataclysm:amethyst_crab")) {
+        /** @type {Internal.LivingEntity} */
+        let entity = event.getEntity();
+        let attr = `oneenoughdamage:com/github/l_ender/cataclysm/entity/animation_monster/boss_monsters/amethyst_crab_entity/area_attack/1/m`;
+        entity.modifyAttribute(attr, "oneenoughdamage:example", 3, 'addition');
+    }
+});
 ```
 
-如果生成内容没有变化，不会重写 TOML，也不会创建备份。
+## 覆盖面
 
-## TOML 配置
+大部分纯数值或简单变量组合的伤害都会被扫描到，考虑到部分模组作者有自己的想法，做到百分百覆盖是不可能的。
 
-修改等号右侧的数字即可调整伤害：
+目前测试了原版、灾变、灾厄入侵，覆盖率非常高，后面这两个模组可以说全都是硬编码伤害。
 
-```toml
-# Invoker - Invoker（祈唤师）（类型：生物）
-# 模式：替换（r），默认 10.0，伤害源 indirectMagic，fuzs.illagerinvasion.world.entity.monster.InvokerFangs#damage#2
-"oneenoughdamage:fuzs/illagerinvasion/world/entity/monster/invoker_fangs/damage/2/r@illagerinvasion:invoker" = 200.0
-```
+灾变自己有一套动态伤害，因而注册的属性很大一部分是默认为 1.0 的倍率形式，这一块也不能说百分百能判断准确，只能靠不断修正。
 
-后缀含义：
+对于灾变，本模组的主要应用场景其实是平衡同一生物的不同伤害，比如利维坦有11种不同的伤害，焰魔有17种不同的伤害，而原版只有可怜的一个 `minecraft:generic.attack_damage`，根本不够看。
 
-- `/r`：替换原伤害。
-- `/m`：作为倍率参与计算。
+实际上，还有一些硬编码是本模组目前还无法解决的，比如一个生物召唤出了没有 owner 字段的飞行物实体，飞行物对玩家造成了 DamageSource 为 null 的伤害。
 
-实体限定 key 使用 `@entity_id`：
+通过黑魔法可以追溯到是什么类型的生物造成了这次伤害，但可惜的是在多个同类生物同时在场的情况下，想要追踪到目标生物非常困难。
 
-```toml
-"oneenoughdamage:net/minecraft/world/entity/projectile/abstract_arrow/on_hit_entity/1/m@minecraft:skeleton" = 1.0
-"minecraft:generic.attack_damage@minecraft:skeleton" = 2.0
-```
+对此，我们有凑合能用的就近搜索方案：
 
-同一个 Attribute 可以给不同实体配置不同数值。没有 `@entity_id` 的 key 是全局 Attribute 默认值；有 `@entity_id` 的 key 只作用于对应实体类型。
-
-## 弹射物和非生物实体伤害
-
-非生物伤害源只有在能追溯到 LivingEntity 时才会进入主 TOML。
-
-例子：
-
-- `AbstractArrow#onHitEntity` 会按射手生成配置，例如 `minecraft:skeleton`、`minecraft:stray`、`minecraft:wither_skeleton`。
-- 模组弹射物如果能追踪到创建或发射它的生物，也会挂到对应生物。
-- 尖牙、召唤物、效果实体等如果能解析出召唤者，也会挂到召唤者。
-- 无法安全归属的内容继续留在 `damage-point-unattributed.md`，不会强行写进 TOML。
-
-现在没有全局 `oneenoughdamage:projectile_base_damage` 配置项。这个 id 只保留了一个旧存档兼容注册，避免已有世界里保存过该 Attribute 的实体刷 unknown-attribute 警告；它不会生成配置，不会主动添加到实体，也不参与伤害计算。
-
-## 原版近战伤害
-
-如果生物拥有原版 `minecraft:generic.attack_damage`，TOML 会生成实体限定的近战基础伤害配置：
-
-```toml
-"minecraft:generic.attack_damage@minecraft:zombie" = 3.0
-```
-
-这个值只修改对应实体类型的近战基础伤害。
-
-## 配置文件
-
-`oneenoughdamage.toml` 会在启动时读取：
-
-```toml
-readCache = false
-debugMode = false
-inferAttributeHolder = true
-inferAttributeHolderSearchRadius = 32.0
-```
-
-- `readCache`：为 `true` 时，如果 `damage_points-cache.json` 已存在就复用缓存；为 `false` 时每次启动重新扫描。
-- `debugMode`：启用 TOML 热重载和 Attribute 默认值调试 hook。这个开关本身需要重启才生效。
 - `inferAttributeHolder`：当伤害没有直接 LivingEntity 攻击者时，尝试在附近推断归属实体。
 - `inferAttributeHolderSearchRadius`：归属推断搜索半径，单位为方块。
 
-调试模式开启后，OED 会监听 `damage-point-dictionary.toml`，只增量读取发生变化的 key，并把变更同步到已加载实体。
+如果你遇到了其他覆盖面不足的相关问题，也欢迎反馈。
 
-## 构建
+## 未来计划
 
-```text
-./gradlew build
-```
-
-开发常用命令：
-
-```text
-./gradlew compileJava
-./gradlew runServer
-./gradlew runClient
-```
-
-## 环境
-
-- Minecraft 1.20.1
-- Forge 47.3.0
-- Java 17
-- License: GNU GPL 3.0
+- 继续提高覆盖面
+- 游戏内可视化编辑属性默认值
+- 移植其他版本
