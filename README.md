@@ -51,7 +51,7 @@
 - [KubeJS 修改属性教程](https://docs.variedmc.cc/zh/modpack/kubejs/1.20.1/Entity/Attribute)
 - [原版 /attribute 指令教程](https://zh.minecraft.wiki/w/%E5%91%BD%E4%BB%A4/attribute?variant=zh-cn)
 
-以下是一个示例，灾变的紫水晶巨蟹每次受到伤害后自身所造成伤害+3，安装了 ProbeJS 之后打出 @attribute 即可触发属性名自动补全。
+以下是一个示例，灾变的紫水晶巨蟹每次受到伤害后，自身缩进地下再蹦出来所造成的范围伤害伤害翻倍，安装了 ProbeJS 之后打出 @attribute 即可触发属性名自动补全。
 
 ```javascript
 // server_scripts
@@ -60,7 +60,7 @@ EntityEvents.hurt(event => {
         /** @type {Internal.LivingEntity} */
         let entity = event.getEntity();
         let attr = `oneenoughdamage:com/github/l_ender/cataclysm/entity/animation_monster/boss_monsters/amethyst_crab_entity/area_attack/1/m`;
-        entity.modifyAttribute(attr, "oneenoughdamage:example", 3, 'addition');
+        entity.modifyAttribute(attr, "oneenoughdamage:example", 1, 'addition');
     }
 });
 ```
