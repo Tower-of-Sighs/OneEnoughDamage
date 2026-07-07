@@ -43,6 +43,10 @@ public final class DamagePointHooks {
             return fallback;
         }
 
+        return getDamage(living, attributePath, fallback);
+    }
+
+    private static float getDamage(LivingEntity living, String attributePath, float fallback) {
         Attribute attribute = ForgeRegistries.ATTRIBUTES.getValue(new ResourceLocation(OneEnoughDamage.MODID, attributePath));
         if (attribute == null) {
             LOGGER.info("OED kept {} at {} because attribute is not registered", attributePath, fallback);
@@ -55,8 +59,9 @@ public final class DamagePointHooks {
             return fallback;
         }
 
-        float value = (float) instance.getValue();
-        float result = attributePath.endsWith("/m") ? fallback * value : value;
+        float pointValue = (float) instance.getValue();
+        float pointDamage = attributePath.endsWith("/m") ? fallback * pointValue : pointValue;
+        float result = applyGlobalDamage(living, pointDamage);
         LOGGER.info("OED changed {} from {} to {} using {}", attributePath, fallback, result, living);
         return result;
     }
@@ -72,6 +77,14 @@ public final class DamagePointHooks {
         }
 
         return getDamage(living, point.attributePath(), fallback);
+    }
+
+    private static float applyGlobalDamage(LivingEntity living, float damage) {
+        AttributeInstance instance = living.getAttribute(DamagePointAttributes.GLOBAL_DAMAGE.get());
+        if (instance == null) {
+            return damage;
+        }
+        return damage * (float) instance.getValue();
     }
 
     private static DamagePointFinder finder() {
