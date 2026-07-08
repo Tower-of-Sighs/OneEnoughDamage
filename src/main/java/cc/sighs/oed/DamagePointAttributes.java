@@ -2,6 +2,7 @@ package cc.sighs.oed;
 
 import cc.sighs.oed.asm.DamagePointData;
 import cc.sighs.oed.asm.DamagePointTomlConfig;
+import com.mojang.logging.LogUtils;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Collection;
@@ -26,9 +27,12 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.registries.DeferredRegister;
 import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
+import org.slf4j.Logger;
 
 @Mod.EventBusSubscriber(modid = OneEnoughDamage.MODID, bus = Mod.EventBusSubscriber.Bus.MOD)
 public final class DamagePointAttributes {
+    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final double ATTRIBUTE_MAX_VALUE = Double.MAX_VALUE;
     public static final String GLOBAL_DAMAGE_ATTRIBUTE_PATH = "global_damage";
     public static final DeferredRegister<Attribute> ATTRIBUTES =
             DeferredRegister.create(ForgeRegistries.ATTRIBUTES, OneEnoughDamage.MODID);
@@ -39,7 +43,7 @@ public final class DamagePointAttributes {
                     "oneenoughdamage.projectile_base_damage",
                     -1.0D,
                     -1.0D,
-                    2048.0D
+                    ATTRIBUTE_MAX_VALUE
             ).setSyncable(true)
     );
     public static final RegistryObject<Attribute> GLOBAL_DAMAGE = ATTRIBUTES.register(
@@ -48,7 +52,7 @@ public final class DamagePointAttributes {
                     "oneenoughdamage.global_damage",
                     1.0D,
                     0.0D,
-                    2048.0D
+                    ATTRIBUTE_MAX_VALUE
             ).setSyncable(true)
     );
     private static final Map<DamagePointData.DamagePoint, RegistryObject<Attribute>> DAMAGE_POINT_ATTRIBUTES = registerDamagePointAttributes();
@@ -63,14 +67,19 @@ public final class DamagePointAttributes {
 
     private static Map<DamagePointData.DamagePoint, RegistryObject<Attribute>> registerDamagePointAttributes() {
         Map<DamagePointData.DamagePoint, RegistryObject<Attribute>> attributes = new LinkedHashMap<>();
+        Set<String> registeredPaths = new LinkedHashSet<>();
         for (DamagePointData.DamagePoint point : DamagePointData.points()) {
+            if (!registeredPaths.add(point.attributePath())) {
+                LOGGER.warn("OED skipped duplicate attribute registration for {}", point.attributePath());
+                continue;
+            }
             RegistryObject<Attribute> attribute = ATTRIBUTES.register(
                     point.attributePath(),
                     () -> new RangedAttribute(
                             point.description(),
                             point.defaultDamage(),
                             0.0D,
-                            2048.0D
+                            ATTRIBUTE_MAX_VALUE
                     ).setSyncable(true)
             );
             attributes.put(point, attribute);

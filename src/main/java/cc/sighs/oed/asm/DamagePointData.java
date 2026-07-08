@@ -2,15 +2,20 @@ package cc.sighs.oed.asm;
 
 import cc.sighs.oed.scan.DamagePointScanResult;
 import cc.sighs.oed.scan.DamagePointScanner;
+import com.mojang.logging.LogUtils;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import org.slf4j.Logger;
 
 public final class DamagePointData {
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final Path CACHE_FILE = DamagePointScanner.cacheFile();
 
     private DamagePointData() {
@@ -23,13 +28,13 @@ public final class DamagePointData {
         }
 
         List<DamagePointScanResult> scanResults = DamagePointScanner.readCache();
-        List<DamagePoint> points = new ArrayList<>(scanResults.size());
+        Map<String, DamagePoint> deduplicatedPoints = new LinkedHashMap<>(scanResults.size());
         for (DamagePointScanResult result : scanResults) {
             if (result.defaultDamage() == 0.0F || result.defaultDamage() == Float.MAX_VALUE) {
                 continue;
             }
             String attributePath = stripNamespace(result.attribute());
-            points.add(new DamagePoint(
+            DamagePoint point = new DamagePoint(
                     result.owner(),
                     result.method(),
                     result.descriptor(),
@@ -38,8 +43,22 @@ public final class DamagePointData {
                     attributePath,
                     result.description(),
                     result.constant()
-            ));
+            );
+            DamagePoint previous = deduplicatedPoints.putIfAbsent(attributePath, point);
+            if (previous != null) {
+                LOGGER.warn(
+                        "OED skipped duplicate damage point attribute {} from {}#{}#{}, already registered by {}#{}#{}",
+                        attributePath,
+                        point.owner(),
+                        point.method(),
+                        point.ordinal(),
+                        previous.owner(),
+                        previous.method(),
+                        previous.ordinal()
+                );
+            }
         }
+        List<DamagePoint> points = new ArrayList<>(deduplicatedPoints.values());
         points.sort(Comparator.comparing(DamagePoint::owner)
                 .thenComparing(DamagePoint::method)
                 .thenComparingInt(DamagePoint::ordinal));

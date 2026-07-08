@@ -33,6 +33,7 @@ import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.IincInsnNode;
 import org.objectweb.asm.tree.IntInsnNode;
@@ -49,6 +50,10 @@ public final class DamagePointScanner {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String HURT_TARGET_OWNER_PREFIX = "net/minecraft/world/entity/";
     private static final String ENTITY_HURT_DESC = "(Lnet/minecraft/world/damagesource/DamageSource;F)Z";
+    private static final String DAMAGE_SOURCE_DESC = "Lnet/minecraft/world/damagesource/DamageSource;";
+    private static final String DAMAGE_SOURCE_RETURN_DESC = ")Lnet/minecraft/world/damagesource/DamageSource;";
+    private static final String RESOURCE_KEY_DESC = "Lnet/minecraft/resources/ResourceKey;";
+    private static final String DAMAGE_TYPES_OWNER = "net/minecraft/world/damagesource/DamageTypes";
     private static final Set<String> HURT_METHOD_NAMES = hurtMethodNames();
     private static final Path CACHE_FILE = Paths.get("config", "OED", "damage_points-cache.json");
     private static boolean scannedThisRun;
@@ -130,6 +135,7 @@ public final class DamagePointScanner {
                         getString(object, "descriptor"),
                         getInt(object, "ordinal"),
                         getFloat(object, "default"),
+                        getString(object, "damageType"),
                         getBoolean(object, "transformed"),
                         getBoolean(object, "constant")
                 ));
@@ -206,6 +212,7 @@ public final class DamagePointScanner {
                         method.desc,
                         hurtOrdinal,
                         defaultDamage,
+                        resolveDamageType(method, instruction),
                         false,
                         constant
                 ));
@@ -322,6 +329,111 @@ public final class DamagePointScanner {
         return resolvePreviousInt(method, store, depth + 1);
     }
 
+    private static String resolveDamageType(MethodNode method, AbstractInsnNode instruction) {
+        AbstractInsnNode cursor = previousMeaningful(instruction.getPrevious());
+        int scanned = 0;
+        while (cursor != null && scanned < 40) {
+            if (cursor instanceof MethodInsnNode methodInsn && methodInsn.desc.endsWith(DAMAGE_SOURCE_RETURN_DESC)) {
+                String keyFromFactory = damageTypeFromFactory(methodInsn, cursor);
+                if (keyFromFactory != null) {
+                    return keyFromFactory;
+                }
+            }
+            if (cursor instanceof FieldInsnNode fieldInsn && DAMAGE_SOURCE_DESC.equals(fieldInsn.desc)) {
+                return normalizeDamageTypeToken(fieldInsn.owner + "#" + fieldInsn.name);
+            }
+            if (cursor instanceof VarInsnNode varInsn && varInsn.getOpcode() == Opcodes.ALOAD) {
+                String local = resolveStoredDamageType(method, cursor, varInsn.var, 0);
+                if (local != null) {
+                    return local;
+                }
+            }
+            if (isBranchBoundary(cursor)) {
+                break;
+            }
+            cursor = previousMeaningful(cursor.getPrevious());
+            scanned++;
+        }
+        return "unknown";
+    }
+
+    private static String resolveStoredDamageType(MethodNode method, AbstractInsnNode before, int local, int depth) {
+        if (depth > 4) {
+            return null;
+        }
+        AbstractInsnNode store = findPreviousLocalWrite(method, before, local, Opcodes.ASTORE);
+        if (store == null) {
+            return null;
+        }
+        AbstractInsnNode previous = previousMeaningful(store.getPrevious());
+        if (previous instanceof MethodInsnNode methodInsn && methodInsn.desc.endsWith(DAMAGE_SOURCE_RETURN_DESC)) {
+            return damageTypeFromFactory(methodInsn, previous);
+        }
+        if (previous instanceof FieldInsnNode fieldInsn && DAMAGE_SOURCE_DESC.equals(fieldInsn.desc)) {
+            return normalizeDamageTypeToken(fieldInsn.owner + "#" + fieldInsn.name);
+        }
+        if (previous instanceof VarInsnNode varInsn && varInsn.getOpcode() == Opcodes.ALOAD) {
+            return resolveStoredDamageType(method, previous, varInsn.var, depth + 1);
+        }
+        return null;
+    }
+
+    private static String damageTypeFromFactory(MethodInsnNode methodInsn, AbstractInsnNode instruction) {
+        if (DAMAGE_TYPES_OWNER.equals(methodInsn.owner)) {
+            return normalizeDamageTypeToken(methodInsn.name);
+        }
+
+        if ("net/minecraft/world/damagesource/DamageSources".equals(methodInsn.owner)) {
+            if ("source".equals(methodInsn.name)) {
+                String resourceKey = findPreviousDamageTypeKey(instruction.getPrevious());
+                return resourceKey != null ? resourceKey : "minecraft:source";
+            }
+            return normalizeDamageTypeToken(methodInsn.name);
+        }
+
+        if (methodInsn.name.toLowerCase(Locale.ROOT).contains("damage")) {
+            return normalizeDamageTypeToken(methodInsn.owner + "#" + methodInsn.name);
+        }
+        return null;
+    }
+
+    private static String findPreviousDamageTypeKey(AbstractInsnNode instruction) {
+        AbstractInsnNode cursor = previousMeaningful(instruction);
+        int scanned = 0;
+        while (cursor != null && scanned < 16) {
+            if (cursor instanceof FieldInsnNode fieldInsn && RESOURCE_KEY_DESC.equals(fieldInsn.desc)) {
+                if (DAMAGE_TYPES_OWNER.equals(fieldInsn.owner)) {
+                    return "minecraft:" + camelToSnake(fieldInsn.name);
+                }
+                return normalizeDamageTypeToken(fieldInsn.owner + "#" + fieldInsn.name);
+            }
+            if (cursor instanceof LdcInsnNode ldcInsn && ldcInsn.cst instanceof String value && value.contains(":")) {
+                return value.toLowerCase(Locale.ROOT);
+            }
+            if (isBranchBoundary(cursor)) {
+                break;
+            }
+            cursor = previousMeaningful(cursor.getPrevious());
+            scanned++;
+        }
+        return null;
+    }
+
+    private static String normalizeDamageTypeToken(String value) {
+        String normalized = value.replace('/', '.');
+        int hash = normalized.lastIndexOf('#');
+        if (hash >= 0) {
+            String owner = normalized.substring(0, hash);
+            String member = normalized.substring(hash + 1);
+            if (owner.endsWith(".DamageTypes")) {
+                return "minecraft:" + camelToSnake(member);
+            }
+            String namespace = owner.contains(".") ? owner.substring(owner.lastIndexOf('.') + 1) : owner;
+            return normalizeAttributePath(namespace + "/" + camelToSnake(member)).replace('/', ':');
+        }
+        return normalizeAttributePath(camelToSnake(normalized)).replace('/', ':');
+    }
+
     private static AbstractInsnNode findPreviousLocalWrite(MethodNode method, AbstractInsnNode before, int local, int storeOpcode) {
         int scanned = 0;
         for (AbstractInsnNode current = before.getPrevious(); current != null && scanned < 80; current = current.getPrevious()) {
@@ -425,6 +537,7 @@ public final class DamagePointScanner {
             json.append("      \"descriptor\": \"").append(escape(result.descriptor())).append("\",\n");
             json.append("      \"ordinal\": ").append(result.ordinal()).append(",\n");
             json.append("      \"default\": ").append(result.defaultDamage()).append(",\n");
+            json.append("      \"damageType\": \"").append(escape(result.damageType())).append("\",\n");
             json.append("      \"constant\": ").append(result.constant()).append(",\n");
             json.append("      \"transformed\": ").append(result.transformed()).append(",\n");
             String attributePath = attributePath(result.owner(), result.method(), result.ordinal(), result.constant());

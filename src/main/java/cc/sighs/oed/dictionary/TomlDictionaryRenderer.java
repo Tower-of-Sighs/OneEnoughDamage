@@ -36,9 +36,9 @@ public final class TomlDictionaryRenderer {
     public static void render(Map<String, Map<MobKey, List<DamagePointScanResult>>> groups, Path outputFile) {
         Map<String, Float> configuredValues = DamagePointTomlConfig.readValues(outputFile);
         StringBuilder lines = new StringBuilder();
-        lines.append("# OneEnoughDamage 硬编码伤害点配置字典\n");
-        lines.append("# 改等号右侧的数字即可修改对应 attribute 的初始值，重启游戏后生效。\n");
-        lines.append("# /r 表示替换原伤害，/m 表示作为乘数参与计算。\n\n");
+        lines.append("# OneEnoughDamage hardcoded damage config dictionary\n");
+        lines.append("# Edit the number on the right to change the initial value of the attribute.\n");
+        lines.append("# /r means replace original damage, /m means multiply original damage.\n\n");
         appendGlobalDamageConfig(lines, configuredValues);
 
         for (Map.Entry<String, Map<MobKey, List<DamagePointScanResult>>> namespaceEntry : groups.entrySet()) {
@@ -53,12 +53,12 @@ public final class TomlDictionaryRenderer {
                 if (!key.enName().isBlank() || !key.zhName().isBlank()) {
                     lines.append(" - ").append(key.enName());
                     if (!key.zhName().equals(key.enName())) {
-                        lines.append("（").append(key.zhName()).append("）");
+                        lines.append(" (").append(key.zhName()).append(")");
                     }
                 }
                 String typeLabel = typeLabel(key.type());
                 if (!typeLabel.isEmpty()) {
-                    lines.append("（类型：").append(typeLabel).append("）");
+                    lines.append(" (Type: ").append(typeLabel).append(")");
                 }
                 lines.append("\n");
                 appendEntitySection(lines, key);
@@ -66,7 +66,7 @@ public final class TomlDictionaryRenderer {
                 appendGlobalDamageConfig(lines, configuredValues, key);
 
                 List<DamagePointScanResult> points = entry.getValue();
-                points.sort(Comparator.comparing((DamagePointScanResult p) -> p.owner())
+                points.sort(Comparator.comparing(DamagePointScanResult::owner)
                         .thenComparing(DamagePointScanResult::method)
                         .thenComparingInt(DamagePointScanResult::ordinal));
                 Set<String> renderedAttributes = new LinkedHashSet<>();
@@ -80,12 +80,11 @@ public final class TomlDictionaryRenderer {
                             internalAttribute,
                             configuredValues.getOrDefault(point.attribute(), point.defaultDamage())
                     );
-                    lines.append("# 模式：")
-                            .append(point.constant() ? "替换（r）" : "乘数（m）")
-                            .append("，默认 ")
-                            .append(point.defaultDamage())
-                            .append("，")
-                            .append(point.description())
+                    lines.append("# mode: ")
+                            .append(point.constant() ? "replace (/r)" : "multiply (/m)")
+                            .append(", default: ").append(point.defaultDamage())
+                            .append(", DamageType: ").append(point.damageType())
+                            .append(", ").append(point.description())
                             .append("\n");
                     lines.append('"').append(escapeTomlString(outputAttribute)).append("\" = ")
                             .append(formatFloat(value)).append("\n");
@@ -177,14 +176,14 @@ public final class TomlDictionaryRenderer {
             return "";
         }
         return switch (type) {
-            case "living" -> "生物";
-            case "projectile" -> "弹射物";
-            case "entity" -> "实体";
-            case "item" -> "物品";
-            case "block" -> "方块";
-            case "effect" -> "效果";
-            case "behavior" -> "AI 行为";
-            default -> "其他";
+            case "living" -> "Living";
+            case "projectile" -> "Projectile";
+            case "entity" -> "Entity";
+            case "item" -> "Item";
+            case "block" -> "Block";
+            case "effect" -> "Effect";
+            case "behavior" -> "Behavior";
+            default -> "Other";
         };
     }
 
@@ -222,7 +221,6 @@ public final class TomlDictionaryRenderer {
             return;
         }
         float value = configuredValues.getOrDefault(configKey, defaultValue);
-        lines.append("# 原版近战基础伤害：只作用于 ").append(key.entityId()).append("\n");
         lines.append("# Vanilla melee base damage: only applies to ").append(key.entityId()).append("\n");
         lines.append('"').append(escapeTomlString(outputConfigKey("minecraft:generic.attack_damage", key))).append("\" = ")
                 .append(formatFloat(value)).append("\n");
@@ -231,7 +229,6 @@ public final class TomlDictionaryRenderer {
     private static void appendGlobalDamageConfig(StringBuilder lines, Map<String, Float> configuredValues) {
         String globalKey = "oneenoughdamage:" + DamagePointAttributes.GLOBAL_DAMAGE_ATTRIBUTE_PATH;
         float value = configuredValues.getOrDefault(globalKey, 1.0F);
-        lines.append("# 全局伤害倍率：作用于所有挂靠伤害\n");
         lines.append("# Global damage multiplier: applies to all attributed damage\n");
         lines.append('"').append(escapeTomlString(globalKey)).append("\" = ")
                 .append(formatFloat(value)).append("\n\n");
@@ -244,11 +241,7 @@ public final class TomlDictionaryRenderer {
 
         String globalKey = "oneenoughdamage:" + DamagePointAttributes.GLOBAL_DAMAGE_ATTRIBUTE_PATH;
         String configKey = globalKey + "@" + key.entityId();
-        float value = configuredValues.getOrDefault(
-                configKey,
-                configuredValues.getOrDefault(globalKey, 1.0F)
-        );
-        lines.append("# OED 全局伤害倍率：只作用于 ").append(key.entityId()).append("\n");
+        float value = configuredValues.getOrDefault(configKey, configuredValues.getOrDefault(globalKey, 1.0F));
         lines.append("# OED global damage multiplier: only applies to ").append(key.entityId()).append("\n");
         lines.append('"').append(escapeTomlString(outputConfigKey(globalKey, key))).append("\" = ")
                 .append(formatFloat(value)).append("\n");
@@ -277,5 +270,4 @@ public final class TomlDictionaryRenderer {
         }
         return Float.toString(value);
     }
-
 }
