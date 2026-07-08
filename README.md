@@ -41,7 +41,7 @@
 
 可修改项中包含原版通用的 `minecraft:generic.attack_damage`，哪怕你并不为硬编码伤害发愁，同样可以快速调整并测试大量生物的伤害。
 
-`damage-point-dictionary.toml` 的更新方式是增量更新，当你新增了模组或删除了模组，原有配置会备份，并在保留属性值修改的前提下新增或减少行。
+`damage-point-dictionary.toml` 更新时会备份原有配置，并在保留属性值修改的前提下重新生成。每个 `[entity."实体ID"]` 小节只作用于对应生物，例如在 `[entity."minecraft:zombie"]` 下写 `"oneenoughdamage:global_damage" = 1.5` 会让僵尸的 OED 伤害整体变为 1.5 倍。
 
 ## 动态调整伤害
 
