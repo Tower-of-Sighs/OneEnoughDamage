@@ -34,7 +34,7 @@ public final class DamagePointTomlConfig {
 
     public static float configuredDamage(String attribute, float defaultDamage) {
         Float value = VALUES.get(attribute);
-        if (value == null || !Float.isFinite(value) || value < 0.0F || value > 2048.0F) {
+        if (value == null || !Float.isFinite(value)) {
             return defaultDamage;
         }
         return value;

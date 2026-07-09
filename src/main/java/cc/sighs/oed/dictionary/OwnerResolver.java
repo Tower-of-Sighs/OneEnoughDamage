@@ -305,23 +305,35 @@ public final class OwnerResolver {
     }
 
     private static final class RegistryIndex {
-        private static final Map<String, EntityType<?>> ENTITY_TYPES = new LinkedHashMap<>();
-        private static final Map<String, Block> BLOCKS = new LinkedHashMap<>();
-        private static final Map<String, Item> ITEMS = new LinkedHashMap<>();
-        private static final Map<String, MobEffect> EFFECTS = new LinkedHashMap<>();
+        private static final Map<String, Match> ENTITY_TYPES = new LinkedHashMap<>();
+        private static final Map<String, Match> BLOCKS = new LinkedHashMap<>();
+        private static final Map<String, Match> ITEMS = new LinkedHashMap<>();
+        private static final Map<String, Match> EFFECTS = new LinkedHashMap<>();
 
         static {
             for (EntityType<?> type : ForgeRegistries.ENTITY_TYPES.getValues()) {
-                ENTITY_TYPES.putIfAbsent(lastSegment(type.getDescriptionId()), type);
+                ResourceLocation key = ForgeRegistries.ENTITY_TYPES.getKey(type);
+                if (key != null) {
+                    ENTITY_TYPES.putIfAbsent(lastSegment(key.getPath()), new Match(descriptionId("entity", key), key.toString()));
+                }
             }
             for (Block block : ForgeRegistries.BLOCKS.getValues()) {
-                BLOCKS.putIfAbsent(lastSegment(block.getDescriptionId()), block);
+                ResourceLocation key = ForgeRegistries.BLOCKS.getKey(block);
+                if (key != null) {
+                    BLOCKS.putIfAbsent(lastSegment(key.getPath()), new Match(descriptionId("block", key), null));
+                }
             }
             for (Item item : ForgeRegistries.ITEMS.getValues()) {
-                ITEMS.putIfAbsent(lastSegment(item.getDescriptionId()), item);
+                ResourceLocation key = ForgeRegistries.ITEMS.getKey(item);
+                if (key != null) {
+                    ITEMS.putIfAbsent(lastSegment(key.getPath()), new Match(descriptionId("item", key), null));
+                }
             }
             for (MobEffect effect : ForgeRegistries.MOB_EFFECTS.getValues()) {
-                EFFECTS.putIfAbsent(lastSegment(effect.getDescriptionId()), effect);
+                ResourceLocation key = ForgeRegistries.MOB_EFFECTS.getKey(effect);
+                if (key != null) {
+                    EFFECTS.putIfAbsent(lastSegment(key.getPath()), new Match(descriptionId("effect", key), null));
+                }
             }
         }
 
@@ -330,31 +342,34 @@ public final class OwnerResolver {
             return dot >= 0 ? id.substring(dot + 1) : id;
         }
 
+        private static String descriptionId(String prefix, ResourceLocation key) {
+            return prefix + "." + key.getNamespace() + "." + key.getPath().replace('/', '.');
+        }
+
         Match findBySuffix(String owner) {
             String outer = owner.split("\\$")[0];
             String className = outer.substring(outer.lastIndexOf('.') + 1);
             for (String variant : classNameVariants(className)) {
                 String snake = camelToSnake(variant);
 
-                EntityType<?> entityType = ENTITY_TYPES.get(snake);
+                Match entityType = ENTITY_TYPES.get(snake);
                 if (entityType != null) {
-                    ResourceLocation key = ForgeRegistries.ENTITY_TYPES.getKey(entityType);
-                    return new Match(entityType.getDescriptionId(), key == null ? null : key.toString());
+                    return entityType;
                 }
 
-                Block block = BLOCKS.get(snake);
+                Match block = BLOCKS.get(snake);
                 if (block != null) {
-                    return new Match(block.getDescriptionId(), null);
+                    return block;
                 }
 
-                Item item = ITEMS.get(snake);
+                Match item = ITEMS.get(snake);
                 if (item != null) {
-                    return new Match(item.getDescriptionId(), null);
+                    return item;
                 }
 
-                MobEffect effect = EFFECTS.get(snake);
+                Match effect = EFFECTS.get(snake);
                 if (effect != null) {
-                    return new Match(effect.getDescriptionId(), null);
+                    return effect;
                 }
             }
             return null;
