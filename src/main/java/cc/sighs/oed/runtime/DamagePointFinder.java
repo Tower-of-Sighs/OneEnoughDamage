@@ -4,6 +4,7 @@ import cc.sighs.oed.asm.DamagePointData;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -26,7 +27,7 @@ public final class DamagePointFinder {
         for (Caller caller : findDamageCallers()) {
             List<DamagePointData.DamagePoint> points = damagePointsByCaller.get(caller.key());
             if (points == null) {
-                points = damagePointsByOwnerAndDescriptor.get(caller.ownerDescriptorKey());
+                points = uniqueOwnerDescriptorMatch(caller);
             }
             if (points == null) {
                 continue;
@@ -43,6 +44,22 @@ public final class DamagePointFinder {
             }
         }
         return null;
+    }
+
+    private List<DamagePointData.DamagePoint> uniqueOwnerDescriptorMatch(Caller caller) {
+        List<DamagePointData.DamagePoint> matches = damagePointsByOwnerAndDescriptor.get(caller.ownerDescriptorKey());
+        if (matches == null || matches.isEmpty()) {
+            return null;
+        }
+
+        Set<String> methods = new LinkedHashSet<>();
+        for (DamagePointData.DamagePoint match : matches) {
+            methods.add(match.method());
+            if (methods.size() > 1) {
+                return null;
+            }
+        }
+        return matches;
     }
 
     private DamagePointData.DamagePoint findByObservedCallSite(Caller caller, List<DamagePointData.DamagePoint> matches) {
