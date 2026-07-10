@@ -61,7 +61,9 @@ public final class TomlDictionaryRenderer {
                     lines.append("（类型：").append(typeLabel).append("）");
                 }
                 lines.append("\n");
+                appendEntitySection(lines, key);
                 appendAttackDamageConfig(lines, configuredValues, key);
+                appendGlobalDamageConfig(lines, configuredValues, key);
 
                 List<DamagePointScanResult> points = entry.getValue();
                 points.sort(Comparator.comparing((DamagePointScanResult p) -> p.owner())
@@ -69,12 +71,13 @@ public final class TomlDictionaryRenderer {
                         .thenComparingInt(DamagePointScanResult::ordinal));
                 Set<String> renderedAttributes = new LinkedHashSet<>();
                 for (DamagePointScanResult point : points) {
-                    String attribute = configKey(point.attribute(), key);
-                    if (!renderedAttributes.add(attribute)) {
+                    String internalAttribute = scopedConfigKey(point.attribute(), key);
+                    String outputAttribute = outputConfigKey(point.attribute(), key);
+                    if (!renderedAttributes.add(outputAttribute)) {
                         continue;
                     }
                     float value = configuredValues.getOrDefault(
-                            attribute,
+                            internalAttribute,
                             configuredValues.getOrDefault(point.attribute(), point.defaultDamage())
                     );
                     lines.append("# 模式：")
@@ -84,7 +87,7 @@ public final class TomlDictionaryRenderer {
                             .append("，")
                             .append(point.description())
                             .append("\n");
-                    lines.append('"').append(escapeTomlString(attribute)).append("\" = ")
+                    lines.append('"').append(escapeTomlString(outputAttribute)).append("\" = ")
                             .append(formatFloat(value)).append("\n");
                 }
                 lines.append("\n");
@@ -107,15 +110,9 @@ public final class TomlDictionaryRenderer {
                 return;
             }
 
-            String updated = appendMissingEntries(Files.readString(outputFile, StandardCharsets.UTF_8), generated);
-            if (updated == null) {
-                LOGGER.info("OED dictionary: toml has all generated keys at {}", outputFile);
-                return;
-            }
-
             backupExistingFile(outputFile);
-            Files.writeString(outputFile, updated, StandardCharsets.UTF_8);
-            LOGGER.info("OED dictionary: incrementally updated toml at {}", outputFile);
+            Files.writeString(outputFile, generated, StandardCharsets.UTF_8);
+            LOGGER.info("OED dictionary: rewrote toml at {}", outputFile);
         } catch (IOException e) {
             LOGGER.error("OED dictionary: failed to write toml", e);
         }
@@ -175,92 +172,6 @@ public final class TomlDictionaryRenderer {
         }
     }
 
-    private static String appendMissingEntries(String existing, String generated) {
-        Set<String> existingKeys = tomlKeys(existing);
-        List<TomlEntry> generatedEntries = tomlEntries(generated);
-        StringBuilder additions = new StringBuilder();
-        Set<String> added = new LinkedHashSet<>();
-        for (TomlEntry entry : generatedEntries) {
-            if (existingKeys.contains(entry.key()) || !added.add(entry.key())) {
-                continue;
-            }
-            if (additions.isEmpty()) {
-                additions.append("\n\n# OneEnoughDamage incremental additions / 增量新增条目\n");
-            } else {
-                additions.append("\n");
-            }
-            additions.append(entry.block());
-            if (!entry.block().endsWith("\n")) {
-                additions.append("\n");
-            }
-        }
-        if (additions.isEmpty()) {
-            return null;
-        }
-        String separator = existing.endsWith("\n") ? "" : "\n";
-        return existing + separator + additions;
-    }
-
-    private static Set<String> tomlKeys(String content) {
-        Set<String> keys = new LinkedHashSet<>();
-        for (String line : content.split("\\R")) {
-            String key = tomlKey(line);
-            if (key != null) {
-                keys.add(key);
-            }
-        }
-        return keys;
-    }
-
-    private static List<TomlEntry> tomlEntries(String content) {
-        List<TomlEntry> entries = new ArrayList<>();
-        List<String> pendingComments = new ArrayList<>();
-        for (String line : content.split("\\R")) {
-            String trimmed = line.trim();
-            if (trimmed.startsWith("#")) {
-                pendingComments.add(line);
-                continue;
-            }
-
-            String key = tomlKey(line);
-            if (key != null) {
-                StringBuilder block = new StringBuilder();
-                for (String comment : pendingComments) {
-                    block.append(comment).append("\n");
-                }
-                block.append(line).append("\n");
-                entries.add(new TomlEntry(key, block.toString()));
-            }
-
-            pendingComments.clear();
-        }
-        return entries;
-    }
-
-    private static String tomlKey(String line) {
-        String trimmed = line.trim();
-        if (!trimmed.startsWith("\"")) {
-            return null;
-        }
-        boolean escaped = false;
-        for (int i = 1; i < trimmed.length(); i++) {
-            char c = trimmed.charAt(i);
-            if (escaped) {
-                escaped = false;
-                continue;
-            }
-            if (c == '\\') {
-                escaped = true;
-                continue;
-            }
-            if (c == '"') {
-                int equals = trimmed.indexOf('=', i + 1);
-                return equals < 0 ? null : trimmed.substring(1, i).replace("\\\"", "\"").replace("\\\\", "\\");
-            }
-        }
-        return null;
-    }
-
     private static String typeLabel(String type) {
         if (type == null) {
             return "";
@@ -281,11 +192,23 @@ public final class TomlDictionaryRenderer {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    private static String configKey(String attribute, MobKey key) {
+    private static String scopedConfigKey(String attribute, MobKey key) {
         if (!"living".equals(key.type()) || key.entityId() == null || key.entityId().isBlank()) {
             return attribute;
         }
         return attribute + "@" + key.entityId();
+    }
+
+    private static String outputConfigKey(String attribute, MobKey key) {
+        return attribute;
+    }
+
+    private static void appendEntitySection(StringBuilder lines, MobKey key) {
+        if (!"living".equals(key.type()) || key.entityId() == null || key.entityId().isBlank()) {
+            return;
+        }
+
+        lines.append("[entity.\"").append(escapeTomlString(key.entityId())).append("\"]\n");
     }
 
     private static void appendAttackDamageConfig(StringBuilder lines, Map<String, Float> configuredValues, MobKey key) {
@@ -301,7 +224,7 @@ public final class TomlDictionaryRenderer {
         float value = configuredValues.getOrDefault(configKey, defaultValue);
         lines.append("# 原版近战基础伤害：只作用于 ").append(key.entityId()).append("\n");
         lines.append("# Vanilla melee base damage: only applies to ").append(key.entityId()).append("\n");
-        lines.append('"').append(escapeTomlString(configKey)).append("\" = ")
+        lines.append('"').append(escapeTomlString(outputConfigKey("minecraft:generic.attack_damage", key))).append("\" = ")
                 .append(formatFloat(value)).append("\n");
     }
 
@@ -312,6 +235,23 @@ public final class TomlDictionaryRenderer {
         lines.append("# Global damage multiplier: applies to all attributed damage\n");
         lines.append('"').append(escapeTomlString(globalKey)).append("\" = ")
                 .append(formatFloat(value)).append("\n\n");
+    }
+
+    private static void appendGlobalDamageConfig(StringBuilder lines, Map<String, Float> configuredValues, MobKey key) {
+        if (!"living".equals(key.type()) || key.entityId() == null || key.entityId().isBlank()) {
+            return;
+        }
+
+        String globalKey = "oneenoughdamage:" + DamagePointAttributes.GLOBAL_DAMAGE_ATTRIBUTE_PATH;
+        String configKey = globalKey + "@" + key.entityId();
+        float value = configuredValues.getOrDefault(
+                configKey,
+                configuredValues.getOrDefault(globalKey, 1.0F)
+        );
+        lines.append("# OED 全局伤害倍率：只作用于 ").append(key.entityId()).append("\n");
+        lines.append("# OED global damage multiplier: only applies to ").append(key.entityId()).append("\n");
+        lines.append('"').append(escapeTomlString(outputConfigKey(globalKey, key))).append("\" = ")
+                .append(formatFloat(value)).append("\n");
     }
 
     private static Float attackDamageDefault(String entityId) {
@@ -338,6 +278,4 @@ public final class TomlDictionaryRenderer {
         return Float.toString(value);
     }
 
-    private record TomlEntry(String key, String block) {
-    }
 }

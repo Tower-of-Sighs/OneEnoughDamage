@@ -116,8 +116,14 @@ public final class DamagePointTomlConfig {
         Map<String, Float> values = new HashMap<>();
         try {
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            String entityId = null;
             for (String line : lines) {
-                readLine(line, values);
+                String sectionEntityId = sectionEntityId(line);
+                if (sectionEntityId != null) {
+                    entityId = sectionEntityId.isBlank() ? null : sectionEntityId;
+                    continue;
+                }
+                readLine(line, values, entityId);
             }
         } catch (IOException e) {
             LOGGER.error("OED dictionary: failed to read toml values from {}", file, e);
@@ -125,7 +131,7 @@ public final class DamagePointTomlConfig {
         return Map.copyOf(values);
     }
 
-    private static void readLine(String line, Map<String, Float> values) {
+    private static void readLine(String line, Map<String, Float> values, String entityId) {
         String trimmed = line.trim();
         if (!trimmed.startsWith("\"")) {
             return;
@@ -141,11 +147,29 @@ public final class DamagePointTomlConfig {
         }
 
         String key = unescapeTomlString(trimmed.substring(1, keyEnd));
+        if (entityId != null && !key.contains("@")) {
+            key = key + "@" + entityId;
+        }
         String valueText = stripComment(trimmed.substring(equals + 1).trim());
         try {
             values.put(key, Float.parseFloat(valueText));
         } catch (NumberFormatException ignored) {
         }
+    }
+
+    private static String sectionEntityId(String line) {
+        String trimmed = line.trim();
+        if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+            return null;
+        }
+        String section = trimmed.substring(1, trimmed.length() - 1).trim();
+        if (section.startsWith("entity.\"") && section.endsWith("\"")) {
+            return unescapeTomlString(section.substring("entity.\"".length(), section.length() - 1));
+        }
+        if (section.equals("entity") || !section.startsWith("entity.")) {
+            return "";
+        }
+        return section.substring("entity.".length());
     }
 
     private static int findClosingQuote(String value) {
