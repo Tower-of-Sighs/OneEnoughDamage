@@ -1,5 +1,6 @@
 package cc.sighs.oed.asm;
 
+import cc.sighs.oed.DamagePointAttributes;
 import cc.sighs.oed.OneEnoughDamage;
 import cc.sighs.oed.runtime.AttributeHolderResolver;
 import cc.sighs.oed.runtime.DamagePointFinder;
@@ -42,6 +43,10 @@ public final class DamagePointHooks {
             return fallback;
         }
 
+        return getDamage(living, attributePath, fallback);
+    }
+
+    private static float getDamage(LivingEntity living, String attributePath, float fallback) {
         Holder.Reference<Attribute> attribute = BuiltInRegistries.ATTRIBUTE.getHolder(OneEnoughDamage.id(attributePath)).orElse(null);
         if (attribute == null) {
             LOGGER.info("OED kept {} at {} because attribute is not registered", attributePath, fallback);
@@ -54,8 +59,9 @@ public final class DamagePointHooks {
             return fallback;
         }
 
-        float value = (float) instance.getValue();
-        float result = attributePath.endsWith("/m") ? fallback * value : value;
+        float pointValue = (float) instance.getValue();
+        float pointDamage = attributePath.endsWith("/m") ? fallback * pointValue : pointValue;
+        float result = applyGlobalDamage(living, pointDamage);
         LOGGER.info("OED changed {} from {} to {} using {}", attributePath, fallback, result, living);
         return result;
     }
@@ -71,6 +77,14 @@ public final class DamagePointHooks {
         }
 
         return getDamage(living, point.attributePath(), fallback);
+    }
+
+    private static float applyGlobalDamage(LivingEntity living, float damage) {
+        AttributeInstance instance = living.getAttribute(DamagePointAttributes.GLOBAL_DAMAGE);
+        if (instance == null) {
+            return damage;
+        }
+        return damage * (float) instance.getValue();
     }
 
     private static DamagePointFinder finder() {

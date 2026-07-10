@@ -30,6 +30,7 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 
 @EventBusSubscriber(modid = OneEnoughDamage.MODID)
 public final class DamagePointAttributes {
+    public static final String GLOBAL_DAMAGE_ATTRIBUTE_PATH = "global_damage";
     public static final DeferredRegister<Attribute> ATTRIBUTES =
             DeferredRegister.create(BuiltInRegistries.ATTRIBUTE, OneEnoughDamage.MODID);
     @SuppressWarnings("unused")
@@ -39,6 +40,15 @@ public final class DamagePointAttributes {
                     "oneenoughdamage.projectile_base_damage",
                     -1.0D,
                     -1.0D,
+                    2048.0D
+            ).setSyncable(true)
+    );
+    public static final DeferredHolder<Attribute, Attribute> GLOBAL_DAMAGE = ATTRIBUTES.register(
+            GLOBAL_DAMAGE_ATTRIBUTE_PATH,
+            () -> new RangedAttribute(
+                    "oneenoughdamage.global_damage",
+                    1.0D,
+                    0.0D,
                     2048.0D
             ).setSyncable(true)
     );
@@ -72,6 +82,7 @@ public final class DamagePointAttributes {
 
     private static Map<String, Double> configuredDefaults() {
         Map<String, Double> defaults = new LinkedHashMap<>();
+        defaults.put(OneEnoughDamage.MODID + ":" + GLOBAL_DAMAGE_ATTRIBUTE_PATH, 1.0D);
         for (DamagePointData.DamagePoint point : DamagePointData.points()) {
             defaults.put(OneEnoughDamage.MODID + ":" + point.attributePath(), (double) point.defaultDamage());
         }
@@ -81,6 +92,9 @@ public final class DamagePointAttributes {
     @SubscribeEvent
     public static void onEntityAttributeModification(EntityAttributeModificationEvent event) {
         for (EntityType<? extends LivingEntity> entityType : event.getTypes()) {
+            if (!event.has(entityType, GLOBAL_DAMAGE)) {
+                event.add(entityType, GLOBAL_DAMAGE);
+            }
             for (DeferredHolder<Attribute, Attribute> attribute : DAMAGE_POINT_ATTRIBUTES.values()) {
                 if (!event.has(entityType, attribute)) {
                     event.add(entityType, attribute);

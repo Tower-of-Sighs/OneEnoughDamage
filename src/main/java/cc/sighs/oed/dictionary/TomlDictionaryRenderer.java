@@ -1,5 +1,6 @@
 package cc.sighs.oed.dictionary;
 
+import cc.sighs.oed.DamagePointAttributes;
 import cc.sighs.oed.asm.DamagePointTomlConfig;
 import cc.sighs.oed.scan.DamagePointScanResult;
 import com.mojang.logging.LogUtils;
@@ -38,6 +39,8 @@ public final class TomlDictionaryRenderer {
         lines.append("# OneEnoughDamage 硬编码伤害点配置字典\n");
         lines.append("# 改等号右侧的数字即可修改对应 attribute 的初始值，重启游戏后生效。\n");
         lines.append("# /r 表示替换原伤害，/m 表示作为乘数参与计算。\n\n");
+        appendGlobalDamageConfig(lines, configuredValues);
+
         for (Map.Entry<String, Map<MobKey, List<DamagePointScanResult>>> namespaceEntry : groups.entrySet()) {
             Map<MobKey, List<DamagePointScanResult>> mobs = namespaceEntry.getValue();
             if (mobs == null || mobs.isEmpty()) {
@@ -70,11 +73,16 @@ public final class TomlDictionaryRenderer {
                     if (!renderedAttributes.add(attribute)) {
                         continue;
                     }
-                    float value = configuredValues.getOrDefault(attribute,
-                            configuredValues.getOrDefault(point.attribute(), point.defaultDamage()));
-                    lines.append("# 模式：").append(point.constant() ? "替换（r）" : "乘数（m）")
-                            .append("，默认 ").append(point.defaultDamage())
-                            .append("，").append(point.description())
+                    float value = configuredValues.getOrDefault(
+                            attribute,
+                            configuredValues.getOrDefault(point.attribute(), point.defaultDamage())
+                    );
+                    lines.append("# 模式：")
+                            .append(point.constant() ? "替换（r）" : "乘数（m）")
+                            .append("，默认 ")
+                            .append(point.defaultDamage())
+                            .append("，")
+                            .append(point.description())
                             .append("\n");
                     lines.append('"').append(escapeTomlString(attribute)).append("\" = ")
                             .append(formatFloat(value)).append("\n");
@@ -129,7 +137,9 @@ public final class TomlDictionaryRenderer {
         Path backup = outputFile.resolveSibling(baseName + ".backup-" + LocalDateTime.now().format(BACKUP_TIMESTAMP) + suffix);
         int duplicate = 1;
         while (Files.exists(backup)) {
-            backup = outputFile.resolveSibling(baseName + ".backup-" + LocalDateTime.now().format(BACKUP_TIMESTAMP) + "-" + duplicate + suffix);
+            backup = outputFile.resolveSibling(
+                    baseName + ".backup-" + LocalDateTime.now().format(BACKUP_TIMESTAMP) + "-" + duplicate + suffix
+            );
             duplicate++;
         }
         Files.copy(outputFile, backup, StandardCopyOption.COPY_ATTRIBUTES);
@@ -293,6 +303,15 @@ public final class TomlDictionaryRenderer {
         lines.append("# Vanilla melee base damage: only applies to ").append(key.entityId()).append("\n");
         lines.append('"').append(escapeTomlString(configKey)).append("\" = ")
                 .append(formatFloat(value)).append("\n");
+    }
+
+    private static void appendGlobalDamageConfig(StringBuilder lines, Map<String, Float> configuredValues) {
+        String globalKey = "oneenoughdamage:" + DamagePointAttributes.GLOBAL_DAMAGE_ATTRIBUTE_PATH;
+        float value = configuredValues.getOrDefault(globalKey, 1.0F);
+        lines.append("# 全局伤害倍率：作用于所有挂靠伤害\n");
+        lines.append("# Global damage multiplier: applies to all attributed damage\n");
+        lines.append('"').append(escapeTomlString(globalKey)).append("\" = ")
+                .append(formatFloat(value)).append("\n\n");
     }
 
     private static Float attackDamageDefault(String entityId) {
