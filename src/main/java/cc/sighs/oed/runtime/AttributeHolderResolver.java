@@ -89,7 +89,7 @@ public final class AttributeHolderResolver {
                 entityTypes.add((EntityType<? extends LivingEntity>) entityType);
             }
         }
-        if (!entityTypes.isEmpty()) {
+        if (!entityTypes.isEmpty() && DamagePointConfig.debugMode()) {
             LOGGER.info("OED inferred {} owner types {}", ownerClass.getName(), entityTypes.stream().map(BuiltInRegistries.ENTITY_TYPE::getKey).toList());
         }
         return List.copyOf(entityTypes);

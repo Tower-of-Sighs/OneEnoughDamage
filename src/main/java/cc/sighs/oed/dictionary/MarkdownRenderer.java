@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 
@@ -24,7 +25,8 @@ public final class MarkdownRenderer {
         if (subtitle != null && !subtitle.isBlank()) {
             lines.append(subtitle).append("\n\n");
         }
-        lines.append("本文件按模组和来源列出扫描到的可配置硬编码伤害属性 ID。`〇/r` 表示该属性直接替换原伤害，`〇/m` 表示该属性作为乘数（原伤害 × 属性值）。\n\n");
+        lines.append("This file lists scanned configurable hardcoded damage attributes by namespace and source.\n");
+        lines.append("`/r` means replace original damage directly, `/m` means multiply original damage.\n\n");
 
         for (Map.Entry<String, Map<MobKey, List<DamagePointScanResult>>> namespaceEntry : groups.entrySet()) {
             String namespace = namespaceEntry.getKey();
@@ -37,22 +39,26 @@ public final class MarkdownRenderer {
             for (Map.Entry<MobKey, List<DamagePointScanResult>> entry : mobs.entrySet()) {
                 MobKey key = entry.getKey();
                 String typeLabel = typeLabel(key.type());
-                String typeSuffix = typeLabel.isEmpty() ? "" : "（类型：" + typeLabel + "）";
+                String typeSuffix = typeLabel.isEmpty() ? "" : " (Type: " + typeLabel + ")";
                 if (key.enName().equals(key.zhName())) {
                     lines.append("### ").append(escapeMarkdown(key.enName())).append(typeSuffix).append("\n\n");
                 } else {
                     lines.append("### ").append(escapeMarkdown(key.enName()))
-                            .append("（").append(escapeMarkdown(key.zhName())).append("）").append(typeSuffix).append("\n\n");
+                            .append(" (").append(escapeMarkdown(key.zhName())).append(")")
+                            .append(typeSuffix).append("\n\n");
                 }
                 List<DamagePointScanResult> points = entry.getValue();
-                points.sort(Comparator.comparing((DamagePointScanResult p) -> p.owner())
-                        .thenComparing(p -> p.method())
-                        .thenComparingInt(p -> p.ordinal()));
+                points.sort(Comparator.comparing(DamagePointScanResult::owner)
+                        .thenComparing(DamagePointScanResult::method)
+                        .thenComparingInt(DamagePointScanResult::ordinal));
                 for (DamagePointScanResult point : points) {
-                    String mode = point.constant() ? "替换（r）" : "乘数（m）";
-                    lines.append("- `").append(point.attribute()).append("`  <!-- 模式：").append(mode)
-                            .append("，默认 ").append(point.defaultDamage()).append("，")
-                            .append(point.description()).append(" -->\n");
+                    String mode = point.constant() ? "replace (/r)" : "multiply (/m)";
+                    lines.append("- `").append(point.attribute()).append("`")
+                            .append(" <!-- mode: ").append(mode)
+                            .append(", default: ").append(point.defaultDamage())
+                            .append(", DamageType: ").append(point.damageType())
+                            .append(", ").append(point.description())
+                            .append(" -->\n");
                 }
                 lines.append("\n");
             }
@@ -74,14 +80,14 @@ public final class MarkdownRenderer {
             return "";
         }
         return switch (type) {
-            case "living" -> "生物";
-            case "projectile" -> "弹射物";
-            case "entity" -> "实体";
-            case "item" -> "物品";
-            case "block" -> "方块";
-            case "effect" -> "效果";
-            case "behavior" -> "AI 行为";
-            default -> "其他";
+            case "living" -> "Living";
+            case "projectile" -> "Projectile";
+            case "entity" -> "Entity";
+            case "item" -> "Item";
+            case "block" -> "Block";
+            case "effect" -> "Effect";
+            case "behavior" -> "Behavior";
+            default -> "Other";
         };
     }
 
@@ -95,7 +101,7 @@ public final class MarkdownRenderer {
             if (!result.isEmpty()) {
                 result.append(' ');
             }
-            result.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1).toLowerCase(java.util.Locale.ROOT));
+            result.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1).toLowerCase(Locale.ROOT));
         }
         return result.toString();
     }

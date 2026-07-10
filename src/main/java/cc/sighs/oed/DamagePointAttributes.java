@@ -2,6 +2,7 @@ package cc.sighs.oed;
 
 import cc.sighs.oed.asm.DamagePointData;
 import cc.sighs.oed.asm.DamagePointTomlConfig;
+import com.mojang.logging.LogUtils;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -27,9 +28,12 @@ import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
+import org.slf4j.Logger;
 
 @EventBusSubscriber(modid = OneEnoughDamage.MODID)
 public final class DamagePointAttributes {
+    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final double ATTRIBUTE_MAX_VALUE = Double.MAX_VALUE;
     public static final String GLOBAL_DAMAGE_ATTRIBUTE_PATH = "global_damage";
     public static final DeferredRegister<Attribute> ATTRIBUTES =
             DeferredRegister.create(BuiltInRegistries.ATTRIBUTE, OneEnoughDamage.MODID);
@@ -40,7 +44,7 @@ public final class DamagePointAttributes {
                     "oneenoughdamage.projectile_base_damage",
                     -1.0D,
                     -1.0D,
-                    2048.0D
+                    ATTRIBUTE_MAX_VALUE
             ).setSyncable(true)
     );
     public static final DeferredHolder<Attribute, Attribute> GLOBAL_DAMAGE = ATTRIBUTES.register(
@@ -49,7 +53,7 @@ public final class DamagePointAttributes {
                     "oneenoughdamage.global_damage",
                     1.0D,
                     0.0D,
-                    2048.0D
+                    ATTRIBUTE_MAX_VALUE
             ).setSyncable(true)
     );
     private static final Map<DamagePointData.DamagePoint, DeferredHolder<Attribute, Attribute>> DAMAGE_POINT_ATTRIBUTES =
@@ -65,14 +69,19 @@ public final class DamagePointAttributes {
 
     private static Map<DamagePointData.DamagePoint, DeferredHolder<Attribute, Attribute>> registerDamagePointAttributes() {
         Map<DamagePointData.DamagePoint, DeferredHolder<Attribute, Attribute>> attributes = new LinkedHashMap<>();
+        Set<String> registeredPaths = new LinkedHashSet<>();
         for (DamagePointData.DamagePoint point : DamagePointData.points()) {
+            if (!registeredPaths.add(point.attributePath())) {
+                LOGGER.warn("OED skipped duplicate attribute registration for {}", point.attributePath());
+                continue;
+            }
             DeferredHolder<Attribute, Attribute> attribute = ATTRIBUTES.register(
                     point.attributePath(),
                     () -> new RangedAttribute(
                             point.description(),
                             point.defaultDamage(),
                             0.0D,
-                            2048.0D
+                            ATTRIBUTE_MAX_VALUE
                     ).setSyncable(true)
             );
             attributes.put(point, attribute);

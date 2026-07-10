@@ -6,12 +6,23 @@ public record DamagePointScanResult(
         String descriptor,
         int ordinal,
         float defaultDamage,
+        String damageType,
         boolean transformed,
         boolean constant,
         String attribute
 ) {
     public DamagePointScanResult(String owner, String method, String descriptor, int ordinal, float defaultDamage, boolean transformed, boolean constant) {
-        this(owner, method, descriptor, ordinal, defaultDamage, transformed, constant, null);
+        this(owner, method, descriptor, ordinal, defaultDamage, "unknown", transformed, constant, null);
+    }
+
+    public DamagePointScanResult(String owner, String method, String descriptor, int ordinal, float defaultDamage, String damageType, boolean transformed, boolean constant) {
+        this(owner, method, descriptor, ordinal, defaultDamage, damageType, transformed, constant, null);
+    }
+
+    public DamagePointScanResult {
+        if (damageType == null || damageType.isBlank()) {
+            damageType = "unknown";
+        }
     }
 
     public String attribute() {
@@ -25,6 +36,6 @@ public record DamagePointScanResult(
     }
 
     public DamagePointScanResult withAttribute(String attribute) {
-        return new DamagePointScanResult(owner, method, descriptor, ordinal, defaultDamage, transformed, constant, attribute);
+        return new DamagePointScanResult(owner, method, descriptor, ordinal, defaultDamage, damageType, transformed, constant, attribute);
     }
 }
