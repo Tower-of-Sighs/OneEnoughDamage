@@ -33,6 +33,7 @@ import org.slf4j.Logger;
 @EventBusSubscriber(modid = OneEnoughDamage.MODID)
 public final class DamagePointAttributes {
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final double ATTRIBUTE_MIN_VALUE = -Double.MAX_VALUE;
     private static final double ATTRIBUTE_MAX_VALUE = Double.MAX_VALUE;
     public static final String GLOBAL_DAMAGE_ATTRIBUTE_PATH = "global_damage";
     public static final DeferredRegister<Attribute> ATTRIBUTES =
@@ -43,7 +44,7 @@ public final class DamagePointAttributes {
             () -> new RangedAttribute(
                     "oneenoughdamage.projectile_base_damage",
                     -1.0D,
-                    -1.0D,
+                    ATTRIBUTE_MIN_VALUE,
                     ATTRIBUTE_MAX_VALUE
             ).setSyncable(true)
     );
@@ -52,7 +53,7 @@ public final class DamagePointAttributes {
             () -> new RangedAttribute(
                     "oneenoughdamage.global_damage",
                     1.0D,
-                    0.0D,
+                    ATTRIBUTE_MIN_VALUE,
                     ATTRIBUTE_MAX_VALUE
             ).setSyncable(true)
     );
@@ -80,7 +81,7 @@ public final class DamagePointAttributes {
                     () -> new RangedAttribute(
                             point.description(),
                             point.defaultDamage(),
-                            0.0D,
+                            ATTRIBUTE_MIN_VALUE,
                             ATTRIBUTE_MAX_VALUE
                     ).setSyncable(true)
             );
